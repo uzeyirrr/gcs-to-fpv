@@ -145,17 +145,22 @@ async function main() {
   }
 
   if (config.stats.enabled) {
-    await startPanel({
-      stats,
-      store,
-      config,
-      guard,
-      s3: { client, bucket: config.s3.bucket },
-    });
-    const auth = config.stats.user && config.stats.pass ? 'parola korumali' : 'PAROLASIZ';
-    console.log(`[panel] yonetim paneli: http://0.0.0.0:${config.stats.port}/ (${auth})`);
-    if (!config.stats.user || !config.stats.pass) {
-      console.warn('[panel] STATS_USER/STATS_PASS tanimli degil - panel herkese acik.');
+    try {
+      await startPanel({
+        stats,
+        store,
+        config,
+        guard,
+        s3: { client, bucket: config.s3.bucket },
+      });
+      console.log(`[panel] yonetim paneli: http://0.0.0.0:${config.stats.port}/ (parola korumali)`);
+    } catch (err) {
+      if (err.code === 'PANEL_AUTH_MISSING') {
+        // FTP calismaya devam eder; panel kapali kalir.
+        console.error(`[panel] BASLATILMADI: ${err.message}`);
+      } else {
+        throw err;
+      }
     }
   }
 }

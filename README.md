@@ -248,3 +248,28 @@ kullanıcı adını denediği görünür ve engel elle kaldırılabilir.
 
 Bu bir güvenlik duvarı yerine geçmez, sadece parola denemesini yavaşlatır. Şifrelemeyi (FTPS) ve
 mümkünse IP kısıtlamasını hâlâ değerlendirin.
+
+## Güvenlik notları
+
+Uygulama bir güvenlik denetiminden geçti; bulunanlar ve alınan önlemler:
+
+- **CSRF:** Panel HTTP Basic auth kullanıyor ve Basic auth çerez olmadığı için `SameSite`
+  koruması devreye girmez — tarayıcı kimlik bilgilerini o origin'e giden her isteğe, isteği kim
+  başlatırsa başlatsın ekler. Bu yüzden durum değiştiren tüm POST işlemlerinde `Origin`
+  (yoksa `Referer`) başlığı kendi host'umuzla karşılaştırılır; eşleşmezse 403 döner. Başlığın hiç
+  gönderilmediği istekler de reddedilir.
+- **Panel kimlik doğrulaması fail-closed:** `STATS_USER`/`STATS_PASS` tanımlı değilse panel
+  **başlatılmaz**. Panelden FTP hesabı açılabildiği ve tüm kamera görüntüleri gezilebildiği için,
+  sessizce herkese açık hale gelmesindense hiç çalışmaması tercih edilir. FTP sunucusu bu durumda
+  normal çalışmaya devam eder; sebep loga açıkça yazılır.
+- **Parolalar URL'de taşınmaz:** Yeni üretilen FTP parolası, yönlendirmenin sorgu dizesine
+  konsaydı tarayıcı geçmişine ve arada duran Cloudflare/Traefik erişim kayıtlarına düşerdi.
+  Mesaj sunucuda tutulur; yönlendirmede yalnızca tahmin edilemez, **tek kullanımlık** bir kimlik
+  taşınır ve 5 dakika sonra düşer.
+- **Kullanıcı kayıtları asla servis edilmez:** `/dosya` yalnızca tanımlı kamera klasörlerinin
+  altını verir ve `_system/users.json` açıkça dışarıdadır — tek kullanıcılı modda kullanıcının
+  kökü prefix'in kendisi olduğu için bu kontrol gereklidir.
+
+Kalan bilinen risk: **FTP trafiği şifresizdir.** Kameralar sabit IP'den bağlanmadığı için port
+kısıtlanamıyor; kaba kuvvet koruması parola denemesini yavaşlatır ama şifrelemenin yerini tutmaz.
+Kameralarınız FTPS destekliyorsa TLS eklemek en etkili iyileştirme olur.

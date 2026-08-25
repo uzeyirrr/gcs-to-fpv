@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 const { dateStamp } = require('./stats');
 const { listDays, listDayFiles, streamObject } = require('./gallery');
 
@@ -291,6 +292,60 @@ ${body}
 
 const PAGE = 120; // galeride sayfa basina dosya
 
+/**
+ * Islem sonucu mesajlari. Yeni uretilen FTP parolasi kullaniciya gosterilmek
+ * zorunda; sorgu dizesine konursa tarayici gecmisine ve arada duran Cloudflare /
+ * Traefik erisim kayitlarina duser. Bu yuzden mesaj sunucuda tutulur ve
+ * yonlendirmede yalnizca tahmin edilemez, tek kullanimlik bir kimlik tasinir.
+ */
+class FlashStore {
+  constructor({ ttlMs = 5 * 60 * 1000 } = {}) {
+    this.ttlMs = ttlMs;
+    this.items = new Map();
+  }
+
+  put(kind, text) {
+    this._sweep();
+    const id = crypto.randomBytes(16).toString('hex');
+    this.items.set(id, { kind, text, expiresAt: Date.now() + this.ttlMs });
+    return id;
+  }
+
+  take(id) {
+    const item = this.items.get(id);
+    if (!item) return null;
+    this.items.delete(id); // tek kullanimlik
+    return item.expiresAt > Date.now() ? item : null;
+  }
+
+  _sweep() {
+    const now = Date.now();
+    for (const [id, item] of this.items) {
+      if (item.expiresAt <= now) this.items.delete(id);
+    }
+  }
+}
+
+/**
+ * CSRF kontrolu. Basic auth cerez olmadigi icin SameSite korumasi devreye girmez:
+ * tarayici, kimlik bilgilerini istegi kim baslatirsa baslatsin o origin'e ekler.
+ * Bu yuzden durum degistiren her istekte kaynagin kendi sayfamiz oldugunu
+ * dogruluyoruz.
+ */
+function sameOrigin(req) {
+  const host = req.headers.host;
+  if (!host) return false;
+
+  const kaynak = req.headers.origin || req.headers.referer;
+  if (!kaynak) return false; // basligi olmayan istek kabul edilmez
+
+  try {
+    return new URL(kaynak).host === host;
+  } catch (err) {
+    return false;
+  }
+}
+
 function startPanel({ stats, store, config, s3, guard }) {
   const { port, user, pass, staleAfterMinutes } = config.stats;
   const needsAuth = Boolean(user && pass);
@@ -298,9 +353,11 @@ function startPanel({ stats, store, config, s3, guard }) {
     ? 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64')
     : null;
   const ftpInfo = { host: config.ftp.pasvUrl, port: config.ftp.port };
+  const flash = new FlashStore();
 
   const redirect = (res, kind, text) => {
-    res.writeHead(303, { location: `/?${kind}=${encodeURIComponent(text)}` });
+    const id = flash.put(kind === 'ok' ? 'good' : 'bad', text);
+    res.writeHead(303, { location: `/?m=${id}` });
     res.end();
   };
 
@@ -322,6 +379,15 @@ function startPanel({ stats, store, config, s3, guard }) {
       const url = new URL(req.url, 'http://localhost');
 
       if (req.method === 'POST') {
+        if (!sameOrigin(req)) {
+          console.warn(
+            `[panel] CSRF reddedildi: ${url.pathname} ` +
+            `(origin=${req.headers.origin || req.headers.referer || 'yok'})`
+          );
+          res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+          return res.end('Istek reddedildi: gecersiz kaynak');
+        }
+
         const body = await readBody(req);
         const username = (body.get('username') || '').trim();
         try {
@@ -373,9 +439,13 @@ function startPanel({ stats, store, config, s3, guard }) {
         // Yalnizca tanimli kamera klasorlerinin altindaki dosyalar okunabilir;
         // _system/users.json gibi dosyalar bu kontrolden gecemez.
         const izinli = store.list().some(
-          (u) => u.dir && key.startsWith(config.s3.prefix + u.dir)
+          (u) => key.startsWith(config.s3.prefix + u.dir)
         );
-        if (!izinli || key.includes('..')) {
+        // Kullanici kayitlari (parolalar dahil) hicbir kosulda servis edilmez.
+        // Tek kullanicili modda kullanicinin kokü prefix'in kendisidir, bu yuzden
+        // acik olarak disariyor.
+        const yasak = key === store.key;
+        if (!izinli || yasak || key.includes('..')) {
           res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
           return res.end('Bu dosyaya erisim yok');
         }
@@ -449,11 +519,8 @@ function startPanel({ stats, store, config, s3, guard }) {
         return res.end('Bulunamadi');
       }
 
-      const okMsg = url.searchParams.get('ok');
-      const badMsg = url.searchParams.get('hata');
-      const message = okMsg
-        ? { kind: 'good', text: okMsg }
-        : badMsg ? { kind: 'bad', text: badMsg } : null;
+      const flashId = url.searchParams.get('m');
+      const message = flashId ? flash.take(flashId) : null;
 
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(renderDashboard({
@@ -472,6 +539,18 @@ function startPanel({ stats, store, config, s3, guard }) {
       return res.end('Sunucu hatasi');
     }
   });
+
+  if (!needsAuth) {
+    // Panelden FTP hesabi acilabiliyor ve tum kamera goruntuleri gezilebiliyor.
+    // Kimlik bilgisi tanimli degilse panel ACILMAZ; sessizce herkese acik
+    // hale gelmesindense hic calismamasi tercih edilir. FTP sunucusu etkilenmez.
+    const err = new Error(
+      'STATS_USER/STATS_PASS tanimli degil - yonetim paneli baslatilmadi. ' +
+      'Paneli kullanmak icin bu iki degeri ayarlayin, ya da STATS_ENABLED=false yapin.'
+    );
+    err.code = 'PANEL_AUTH_MISSING';
+    return Promise.reject(err);
+  }
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
