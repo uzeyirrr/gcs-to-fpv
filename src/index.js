@@ -5,7 +5,9 @@ const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
 
 const config = require('./config');
 const { S3FileSystem } = require('./s3fs');
-const { Stats, startStatsServer, dateStamp } = require('./stats');
+const { Stats, dateStamp } = require('./stats');
+const { UserStore } = require('./store');
+const { startPanel } = require('./panel');
 
 const client = new S3Client({
   endpoint: config.s3.endpoint,
@@ -18,9 +20,7 @@ const client = new S3Client({
 });
 
 const stats = new Stats({ timezone: config.timezone });
-for (const u of config.users.values()) {
-  stats.register(u.username, config.s3.prefix + u.dir);
-}
+const store = new UserStore({ client, bucket: config.s3.bucket, prefix: config.s3.prefix });
 
 const ftpServer = new FtpSrv({
   url: `ftp://${config.ftp.host}:${config.ftp.port}`,
@@ -33,9 +33,9 @@ const ftpServer = new FtpSrv({
 });
 
 ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
-  const account = config.users.get(username);
+  const account = store.verify(username, password);
 
-  if (!account || account.password !== password) {
+  if (!account) {
     stats.failedLogin(username);
     console.warn(`[ftp] reddedildi: ${username} (${connection.ip})`);
     return reject(new Error('Kullanici adi veya parola hatali'));
@@ -103,25 +103,32 @@ async function main() {
     process.exit(1);
   }
 
+  const loaded = await store.load(config.users);
+  console.log(
+    `[kamera] ${loaded.count} kayit ${loaded.seeded ? 'env ayarindan olusturuldu' : "bucket'tan yuklendi"}`
+  );
+  for (const u of store.list()) stats.register(u.username, config.s3.prefix + u.dir);
+
   await ftpServer.listen();
   console.log(`[ftp] dinleniyor: ftp://${config.ftp.host}:${config.ftp.port}`);
   console.log(`[ftp] pasif mod: ${config.ftp.pasvUrl}:${config.ftp.pasvMin}-${config.ftp.pasvMax}`);
   console.log(
     `[ftp] gun klasoru: ${config.autoDate ? 'acik' : 'kapali'} (${config.timezone}, bugun ${dateStamp(config.timezone)})`
   );
-  console.log(`[ftp] tanimli kamera sayisi: ${config.users.size}`);
-  for (const u of config.users.values()) {
+  console.log(`[ftp] tanimli kamera sayisi: ${store.list().length}`);
+  for (const u of store.list()) {
     const base = config.s3.prefix + u.dir;
     const shown = config.autoDate ? `${base}${dateStamp(config.timezone)}/` : base || '(kok)';
-    console.log(`  - ${u.username} -> ${config.s3.bucket}/${shown}`);
+    const durum = u.enabled === false ? ' [kapali]' : '';
+    console.log(`  - ${u.username} -> ${config.s3.bucket}/${shown}${durum}`);
   }
 
   if (config.stats.enabled) {
-    await startStatsServer(stats, config.stats);
+    await startPanel({ stats, store, config });
     const auth = config.stats.user && config.stats.pass ? 'parola korumali' : 'PAROLASIZ';
-    console.log(`[stats] izleme paneli: http://0.0.0.0:${config.stats.port}/ (${auth})`);
+    console.log(`[panel] yonetim paneli: http://0.0.0.0:${config.stats.port}/ (${auth})`);
     if (!config.stats.user || !config.stats.pass) {
-      console.warn('[stats] STATS_USER/STATS_PASS tanimli degil - panel herkese acik.');
+      console.warn('[panel] STATS_USER/STATS_PASS tanimli degil - panel herkese acik.');
     }
   }
 }

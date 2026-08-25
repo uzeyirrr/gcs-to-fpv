@@ -185,3 +185,33 @@ Sunucu, 8080 portunda kamera başına durum sayfası yayınlar:
 
 Panel HTTP olduğu için Dokploy'da bu Compose servisine domain tanımlayabilirsiniz; Traefik
 8080'e yönlendirir ve HTTPS/Cloudflare sorunsuz çalışır (FTP'nin aksine).
+
+## Yönetim paneli
+
+Panel 8080 portunda çalışır ve **tüm kamera işlemleri buradan yapılır** — sunucuya girmeye,
+`.env` düzenlemeye veya yeniden deploy etmeye gerek yok. Değişiklikler anında geçerli olur.
+
+| İşlem | Ne yapar |
+|---|---|
+| **Kamera oluştur** | FTP hesabı açar, adına göre GCS klasörünü belirler, parolayı üretir |
+| **Yeni parola** | Parolayı döndürür; eski parola anında geçersiz olur |
+| **Kapat / Aç** | Hesabı geçici olarak devre dışı bırakır (dosyalar durur) |
+| **Sil** | Hesabı siler; **GCS'teki dosyalar silinmez** |
+
+Her satırda kameranın durumu, son yükleme zamanı ve yolu, bugünkü/toplam dosya sayısı ve boyutu,
+son bağlanan IP ve son hata görünür. Kamera adı Türkçe girilebilir (`Otopark Kamerası` →
+`otopark-kamerasi`); üretilen parolalar kamera uyumluluğu için yalnızca harf ve rakam içerir.
+
+### Kayıtlar nerede tutuluyor
+
+Kamera kayıtları bucket içinde `_system/users.json` dosyasındadır (`S3_PREFIX` verilmişse onun
+altında). Böylece konteyner yeniden kurulsa da kayıtlar kalır, ayrı bir veritabanı veya kalıcı
+disk gerekmez. Dosya ilk açılışta `FTP_USERS`/`FTP_USER` ayarından tohumlanır; **dosya bir kez
+oluştuktan sonra bu ortam değişkenleri artık okunmaz**, yönetim panele geçer.
+
+FTP parolaları bu dosyada düz metin durur. FTP protokolü parolayı zaten şifresiz taşıdığı ve
+kamera kurulumunda parolanın tekrar okunabilmesi gerektiği için bilinçli bir tercihtir; bucket'a
+erişebilen zaten tüm kamera görüntülerine erişebilmektedir.
+
+`STATS_USER`/`STATS_PASS` paneli korur — panelden FTP hesabı açılabildiği için bu **zorunlu**
+sayılmalıdır. Panel HTTP olduğundan Dokploy'da bu Compose servisine domain tanımlanabilir.
