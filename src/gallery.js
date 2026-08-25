@@ -2,6 +2,7 @@
 
 const path = require('path').posix;
 const { ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { dateStamp } = require('./stats');
 
 const IMAGE_TYPES = {
   '.jpg': 'image/jpeg',
@@ -52,46 +53,76 @@ async function listDays(client, bucket, cameraPrefix) {
   return days.sort().reverse();
 }
 
+/** Bir tarihi verilen saat diliminde "HH:mm" olarak dondurur. */
+function timeStamp(timezone, when) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(when);
+  } catch (err) {
+    return when.toISOString().slice(11, 16);
+  }
+}
+
+/** Bir tarihi verilen saat diliminde "HH" olarak dondurur. */
+function hourStamp(timezone, when) {
+  return timeStamp(timezone, when).slice(0, 2);
+}
+
 /**
- * Gun klasorundeki dosyalar. Kamera saat gibi alt klasorler acmis olabilecegi icin
- * ozyinelemeli listelenir. Sayfa basina `limit` dosya dondurur.
+ * Gun klasorundeki tum gosterilebilir dosyalar. Kamera saat gibi alt klasorler
+ * acmis olabilecegi icin ozyinelemeli listelenir. Saat filtresinin dogru calismasi
+ * icin gunun tamami taranir; `max` ile ust sinir konur.
  */
-async function listFiles(client, bucket, dayPrefix, { limit = 120, token } = {}) {
+async function listDayFiles(client, bucket, dayPrefix, { timezone = 'UTC', max = 5000 } = {}) {
   const files = [];
-  let next = token;
+  let token;
   let truncated = false;
 
   do {
     const res = await client.send(new ListObjectsV2Command({
       Bucket: bucket,
       Prefix: dayPrefix,
-      ContinuationToken: next,
-      MaxKeys: Math.min(1000, limit * 2),
+      ContinuationToken: token,
     }));
 
     for (const o of res.Contents || []) {
       if (o.Key.endsWith('/')) continue;
       const kind = kindOf(o.Key);
       if (kind === 'diger') continue;
+      const mtime = o.LastModified || new Date(0);
       files.push({
         key: o.Key,
         name: o.Key.slice(dayPrefix.length),
         size: Number(o.Size || 0),
-        mtime: o.LastModified,
+        mtime,
+        time: timeStamp(timezone, mtime),
+        hour: hourStamp(timezone, mtime),
         kind,
       });
-      if (files.length >= limit) {
+      if (files.length >= max) {
         truncated = true;
         break;
       }
     }
 
-    next = res.IsTruncated ? res.NextContinuationToken : undefined;
-    if (files.length >= limit) break;
-  } while (next);
+    token = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (token && !truncated);
 
-  files.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
-  return { files, nextToken: files.length >= limit ? next : undefined, truncated };
+  files.sort((a, b) => b.mtime - a.mtime);
+
+  // Saat filtresi secenekleri: sadece dosyasi olan saatler
+  const hours = new Map();
+  for (const f of files) hours.set(f.hour, (hours.get(f.hour) || 0) + 1);
+
+  return {
+    files,
+    truncated,
+    hours: [...hours.entries()].sort((a, b) => b[0].localeCompare(a[0])),
+  };
 }
 
 /**
@@ -125,4 +156,6 @@ async function streamObject(client, bucket, key, req, res) {
   }
 }
 
-module.exports = { listDays, listFiles, streamObject, contentTypeFor, kindOf };
+module.exports = {
+  listDays, listDayFiles, streamObject, contentTypeFor, kindOf, hourStamp, timeStamp,
+};

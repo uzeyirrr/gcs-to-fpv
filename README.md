@@ -222,8 +222,12 @@ Panelde **Galeriyi aç** ile kamera → gün → görüntü şeklinde gezilir. G
 üzerinden akıtılır; bucket herkese açık hale getirilmez ve paylaşılabilir kalıcı bağlantı oluşmaz —
 galeriye erişim panelin kendi parolasıyla korunur.
 
+- **Saat filtresi**: gün seçilince o gün dosya gelen saatler, yanlarında dosya sayısıyla listelenir;
+  bir saate tıklayınca yalnızca o saatin görüntüleri gösterilir. Saat, dosyanın sunucuya ulaştığı
+  ana göre ve `TIMEZONE` saat dilimine göre hesaplanır — kameranın klasör adlandırmasına bağlı değil
 - Kamera saat gibi alt klasörler açtıysa onlar da aynı günün içinde listelenir
-- Sayfa başına 120 dosya, devamı "Sonraki sayfa" ile gelir
+- Sayfa başına 120 dosya; "Önceki / Sonraki" ile gezilir, kaçıncı aralıkta olduğunuz görünür
+- Bir günde 5000'den fazla dosya varsa en yenileri taranır ve uyarı gösterilir
 - Küçük resme tıklayınca tam boy açılır; videolar için aralıklı (range) indirme desteklenir
 - `/dosya` yalnızca tanımlı kamera klasörlerinin altındaki dosyaları verir; `_system/users.json`
   gibi dosyalar ve `..` içeren yollar reddedilir

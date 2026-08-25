@@ -2,7 +2,7 @@
 
 const http = require('http');
 const { dateStamp } = require('./stats');
-const { listDays, listFiles, streamObject } = require('./gallery');
+const { listDays, listDayFiles, streamObject } = require('./gallery');
 
 function humanBytes(n) {
   if (!n) return '0 B';
@@ -209,7 +209,8 @@ ${guardRows.length ? `<h2>Başarısız giriş denemeleri</h2>
 }
 
 
-function renderGallery({ cameras, selected, days, day, files, nextToken, prevQ, guardRows }) {
+function renderGallery({ cameras, selected, days, day, files, hours, hour,
+                        offset, pageSize, total, truncated }) {
   const camNav = cameras.map((c) =>
     `<a href="/galeri?kamera=${encodeURIComponent(c.username)}"
         class="${c.username === selected ? 'sel' : ''}">${esc(c.label || c.username)}</a>`
@@ -220,12 +221,21 @@ function renderGallery({ cameras, selected, days, day, files, nextToken, prevQ, 
         class="${d === day ? 'sel' : ''}">${esc(d)}</a>`
   ).join('');
 
+  const base = `/galeri?kamera=${encodeURIComponent(selected)}&gun=${encodeURIComponent(day)}`;
+  const hourNav = (hours || []).length
+    ? `<a href="${base}" class="${hour ? '' : 'sel'}">Tümü (${total})</a>` +
+      hours.map(([h, n]) =>
+        `<a href="${base}&saat=${encodeURIComponent(h)}"
+            class="${h === hour ? 'sel' : ''}">${esc(h)}:00 <span class="dim">(${n})</span></a>`
+      ).join('')
+    : '';
+
   const tiles = files.map((f) => {
     const src = `/dosya?k=${encodeURIComponent(f.key)}`;
     const inner = f.kind === 'resim'
       ? `<img loading="lazy" src="${src}" alt="${esc(f.name)}">`
       : `<div class="vid">▶ video</div>`;
-    const when = f.mtime ? new Date(f.mtime).toLocaleTimeString('tr-TR') : '';
+    const when = f.time || '';
     return `<div class="tile">
   <a href="${src}" target="_blank" rel="noopener">${inner}</a>
   <div class="meta"><b title="${esc(f.name)}">${esc(f.name)}</b>
@@ -233,12 +243,21 @@ function renderGallery({ cameras, selected, days, day, files, nextToken, prevQ, 
 </div>`;
   }).join('');
 
-  const more = nextToken
-    ? `<div class="nav" style="margin-top:16px"><a href="/galeri?kamera=${encodeURIComponent(selected)}&gun=${encodeURIComponent(day)}&t=${encodeURIComponent(nextToken)}">Sonraki sayfa →</a></div>`
+  const saatQ = hour ? `&saat=${encodeURIComponent(hour)}` : '';
+  const sayfa = [];
+  if (offset > 0) {
+    sayfa.push(`<a href="${base}${saatQ}&s=${Math.max(0, offset - pageSize)}">← Önceki</a>`);
+  }
+  if (offset + pageSize < total) {
+    sayfa.push(`<a href="${base}${saatQ}&s=${offset + pageSize}">Sonraki →</a>`);
+  }
+  const more = sayfa.length
+    ? `<div class="nav" style="margin-top:16px">${sayfa.join('')}
+         <span class="chip">${offset + 1}–${Math.min(offset + pageSize, total)} / ${total}</span></div>`
     : '';
-
-  const prev = prevQ
-    ? `<div class="nav" style="margin-top:8px"><a href="/galeri?kamera=${encodeURIComponent(selected)}&gun=${encodeURIComponent(day)}">← Başa dön</a></div>`
+  const prev = truncated
+    ? `<div class="dim" style="margin-top:12px">Bu günde çok fazla dosya var; yalnızca en yeni
+         ${total} tanesi tarandı. Saat filtresiyle daraltın.</div>`
     : '';
 
   let body;
@@ -258,16 +277,19 @@ function renderGallery({ cameras, selected, days, day, files, nextToken, prevQ, 
 <style>${STYLE}</style></head><body><div class="wrap">
 <div class="bar">
   <div><h1>Galeri</h1>
-    <div class="dim">${esc(selected || '')}${day ? ' · ' + esc(day) : ''}${files.length ? ' · ' + files.length + ' dosya' : ''}</div>
+    <div class="dim">${esc(selected || '')}${day ? ' · ' + esc(day) : ''}${hour ? ' · ' + esc(hour) + ':00' : ''}${total ? ' · ' + total + ' dosya' : ''}</div>
   </div>
   <div class="dim"><a href="/">← Panele dön</a></div>
 </div>
 <h2 style="margin-top:20px">Kamera</h2>
 <div class="nav">${camNav}</div>
 ${days.length ? '<h2>Gün</h2><div class="nav">' + dayNav + '</div>' : ''}
+${hourNav ? '<h2>Saat</h2><div class="nav">' + hourNav + '</div>' : ''}
 ${body}
 </div></body></html>`;
 }
+
+const PAGE = 120; // galeride sayfa basina dosya
 
 function startPanel({ stats, store, config, s3, guard }) {
   const { port, user, pass, staleAfterMinutes } = config.stats;
@@ -369,6 +391,7 @@ function startPanel({ stats, store, config, s3, guard }) {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
           return res.end(renderGallery({
             cameras: [], selected: '', days: [], day: '', files: [],
+            hours: [], hour: '', offset: 0, pageSize: PAGE, total: 0, truncated: false,
           }));
         }
 
@@ -376,20 +399,39 @@ function startPanel({ stats, store, config, s3, guard }) {
         const days = await listDays(s3.client, s3.bucket, camPrefix);
         const istenenGun = url.searchParams.get('gun');
         const gun = days.includes(istenenGun) ? istenenGun : days[0] || '';
-        const token = url.searchParams.get('t') || undefined;
 
-        let files = [];
-        let nextToken;
+        let tumu = [];
+        let hours = [];
+        let truncated = false;
         if (gun) {
-          const sonuc = await listFiles(s3.client, s3.bucket, `${camPrefix}${gun}/`, { token });
-          files = sonuc.files;
-          nextToken = sonuc.nextToken;
+          const sonuc = await listDayFiles(s3.client, s3.bucket, `${camPrefix}${gun}/`, {
+            timezone: config.timezone,
+          });
+          tumu = sonuc.files;
+          hours = sonuc.hours;
+          truncated = sonuc.truncated;
         }
+
+        const istenenSaat = url.searchParams.get('saat') || '';
+        const saat = hours.some(([h]) => h === istenenSaat) ? istenenSaat : '';
+        const suzulmus = saat ? tumu.filter((f) => f.hour === saat) : tumu;
+
+        const offset = Math.max(0, parseInt(url.searchParams.get('s') || '0', 10) || 0);
+        const sayfa = suzulmus.slice(offset, offset + PAGE);
 
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         return res.end(renderGallery({
-          cameras, selected: secili.username, days, day: gun, files, nextToken,
-          prevQ: Boolean(token),
+          cameras,
+          selected: secili.username,
+          days,
+          day: gun,
+          files: sayfa,
+          hours,
+          hour: saat,
+          offset,
+          pageSize: PAGE,
+          total: suzulmus.length,
+          truncated,
         }));
       }
 
