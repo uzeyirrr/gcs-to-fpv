@@ -2,6 +2,7 @@
 
 const http = require('http');
 const { dateStamp } = require('./stats');
+const { listDays, listFiles, streamObject } = require('./gallery');
 
 function humanBytes(n) {
   if (!n) return '0 B';
@@ -79,9 +80,24 @@ button.danger{background:transparent;border-color:#5c1d1d;color:#ff9b9b}
 button.danger:hover{background:#2a1414}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .acts{display:flex;gap:6px;flex-wrap:wrap}
+a{color:#6bb8ff}
+.nav{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+.nav a,.chip{display:inline-block;padding:6px 12px;border-radius:999px;font-size:13px;
+  border:1px solid #2b3145;color:#c9cfdd;text-decoration:none;background:#0b0d12}
+.nav a:hover{background:#1b1f2b}
+.nav a.sel,.chip.sel{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-top:14px}
+.tile{background:#161923;border:1px solid #232838;border-radius:9px;overflow:hidden}
+.tile a{display:block;line-height:0}
+.tile img{width:100%;height:140px;object-fit:cover;background:#0b0d12}
+.tile .meta{padding:7px 9px;line-height:1.35}
+.tile .meta b{font-size:12px;font-weight:600;display:block;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.vid{display:flex;align-items:center;justify-content:center;height:140px;
+  background:#0b0d12;color:#6bb8ff;font-size:13px}
 `;
 
-function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes }) {
+function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, guardRows = [] }) {
   const staleMs = staleAfterMinutes * 60 * 1000;
   const statsBy = new Map(snap.cameras.map((c) => [c.username, c]));
 
@@ -159,6 +175,8 @@ ${msgBlock}
     yeniden başlatma gerekmez.</div>
 </div>
 
+<div class="nav" style="margin:18px 0 0"><a href="/galeri" class="sel">Galeriyi aç →</a></div>
+
 <h2>Kameralar (${users.length})</h2>
 <div class="tablewrap"><table>
 <thead><tr>
@@ -168,6 +186,20 @@ ${msgBlock}
 <tbody>${rows || '<tr><td colspan="9" class="dim">Henüz kamera eklenmemiş</td></tr>'}</tbody>
 </table></div>
 
+${guardRows.length ? `<h2>Başarısız giriş denemeleri</h2>
+<div class="tablewrap"><table style="min-width:640px">
+<thead><tr><th>IP</th><th>Durum</th><th>Deneme</th><th>Son deneme</th><th>Denenen kullanıcı</th><th></th></tr></thead>
+<tbody>${guardRows.map((g) => `<tr>
+  <td><code>${esc(g.ip)}</code></td>
+  <td>${g.banned ? '<span class="pill kapali">Engelli</span>' : '<span class="pill yok">İzleniyor</span>'}</td>
+  <td>${g.failures}</td>
+  <td>${ago(g.lastAt)}</td>
+  <td class="dim">${esc(g.lastUser || '—')}</td>
+  <td><form class="inline" method="post" action="/ip/kaldir">
+    <input type="hidden" name="ip" value="${esc(g.ip)}">
+    <button class="ghost" type="submit">Engeli kaldır</button></form></td>
+</tr>`).join('')}</tbody></table></div>` : ''}
+
 <div class="dim" style="margin-top:18px">
   "Sessiz" = ${staleAfterMinutes} dakikadır yükleme yok · Sayfa otomatik yenilenmez, güncellemek için
   <a href="/" style="color:#6bb8ff">yenileyin</a>
@@ -176,7 +208,68 @@ ${msgBlock}
 </div></body></html>`;
 }
 
-function startPanel({ stats, store, config }) {
+
+function renderGallery({ cameras, selected, days, day, files, nextToken, prevQ, guardRows }) {
+  const camNav = cameras.map((c) =>
+    `<a href="/galeri?kamera=${encodeURIComponent(c.username)}"
+        class="${c.username === selected ? 'sel' : ''}">${esc(c.label || c.username)}</a>`
+  ).join('');
+
+  const dayNav = days.map((d) =>
+    `<a href="/galeri?kamera=${encodeURIComponent(selected)}&gun=${encodeURIComponent(d)}"
+        class="${d === day ? 'sel' : ''}">${esc(d)}</a>`
+  ).join('');
+
+  const tiles = files.map((f) => {
+    const src = `/dosya?k=${encodeURIComponent(f.key)}`;
+    const inner = f.kind === 'resim'
+      ? `<img loading="lazy" src="${src}" alt="${esc(f.name)}">`
+      : `<div class="vid">▶ video</div>`;
+    const when = f.mtime ? new Date(f.mtime).toLocaleTimeString('tr-TR') : '';
+    return `<div class="tile">
+  <a href="${src}" target="_blank" rel="noopener">${inner}</a>
+  <div class="meta"><b title="${esc(f.name)}">${esc(f.name)}</b>
+    <span class="dim">${esc(when)} · ${humanBytes(f.size)}</span></div>
+</div>`;
+  }).join('');
+
+  const more = nextToken
+    ? `<div class="nav" style="margin-top:16px"><a href="/galeri?kamera=${encodeURIComponent(selected)}&gun=${encodeURIComponent(day)}&t=${encodeURIComponent(nextToken)}">Sonraki sayfa →</a></div>`
+    : '';
+
+  const prev = prevQ
+    ? `<div class="nav" style="margin-top:8px"><a href="/galeri?kamera=${encodeURIComponent(selected)}&gun=${encodeURIComponent(day)}">← Başa dön</a></div>`
+    : '';
+
+  let body;
+  if (!cameras.length) {
+    body = '<div class="dim">Henüz kamera yok.</div>';
+  } else if (!days.length) {
+    body = '<div class="dim">Bu kamera henüz dosya yüklememiş.</div>';
+  } else if (!files.length) {
+    body = '<div class="dim">Bu günde görüntülenebilir dosya yok.</div>';
+  } else {
+    body = `<div class="grid">${tiles}</div>${more}${prev}`;
+  }
+
+  return `<!doctype html><html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Galeri — Kamera FTP</title>
+<style>${STYLE}</style></head><body><div class="wrap">
+<div class="bar">
+  <div><h1>Galeri</h1>
+    <div class="dim">${esc(selected || '')}${day ? ' · ' + esc(day) : ''}${files.length ? ' · ' + files.length + ' dosya' : ''}</div>
+  </div>
+  <div class="dim"><a href="/">← Panele dön</a></div>
+</div>
+<h2 style="margin-top:20px">Kamera</h2>
+<div class="nav">${camNav}</div>
+${days.length ? '<h2>Gün</h2><div class="nav">' + dayNav + '</div>' : ''}
+${body}
+</div></body></html>`;
+}
+
+function startPanel({ stats, store, config, s3, guard }) {
   const { port, user, pass, staleAfterMinutes } = config.stats;
   const needsAuth = Boolean(user && pass);
   const expected = needsAuth
@@ -232,6 +325,12 @@ function startPanel({ stats, store, config }) {
             console.log(`[panel] ${username} -> ${enabled ? 'acik' : 'kapali'}`);
             return redirect(res, 'ok', `"${username}" ${enabled ? 'açıldı' : 'kapatıldı'}.`);
           }
+          if (url.pathname === '/ip/kaldir') {
+            const ip = (body.get('ip') || '').trim();
+            guard.unban(ip);
+            console.log(`[panel] IP engeli kaldirildi: ${ip}`);
+            return redirect(res, 'ok', `${ip} engeli kaldirildi.`);
+          }
           if (url.pathname === '/kamera/sil') {
             await store.remove(username);
             stats.forget(username);
@@ -247,11 +346,59 @@ function startPanel({ stats, store, config }) {
 
       const snap = stats.snapshot();
 
+      if (url.pathname === '/dosya') {
+        const key = url.searchParams.get('k') || '';
+        // Yalnizca tanimli kamera klasorlerinin altindaki dosyalar okunabilir;
+        // _system/users.json gibi dosyalar bu kontrolden gecemez.
+        const izinli = store.list().some(
+          (u) => u.dir && key.startsWith(config.s3.prefix + u.dir)
+        );
+        if (!izinli || key.includes('..')) {
+          res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+          return res.end('Bu dosyaya erisim yok');
+        }
+        return streamObject(s3.client, s3.bucket, key, req, res);
+      }
+
+      if (url.pathname === '/galeri') {
+        const cameras = store.list();
+        const istenen = url.searchParams.get('kamera');
+        const secili = cameras.find((c) => c.username === istenen) || cameras[0];
+
+        if (!secili) {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          return res.end(renderGallery({
+            cameras: [], selected: '', days: [], day: '', files: [],
+          }));
+        }
+
+        const camPrefix = config.s3.prefix + secili.dir;
+        const days = await listDays(s3.client, s3.bucket, camPrefix);
+        const istenenGun = url.searchParams.get('gun');
+        const gun = days.includes(istenenGun) ? istenenGun : days[0] || '';
+        const token = url.searchParams.get('t') || undefined;
+
+        let files = [];
+        let nextToken;
+        if (gun) {
+          const sonuc = await listFiles(s3.client, s3.bucket, `${camPrefix}${gun}/`, { token });
+          files = sonuc.files;
+          nextToken = sonuc.nextToken;
+        }
+
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end(renderGallery({
+          cameras, selected: secili.username, days, day: gun, files, nextToken,
+          prevQ: Boolean(token),
+        }));
+      }
+
       if (url.pathname === '/stats.json') {
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         return res.end(JSON.stringify({
           ...snap,
           users: store.list().map(({ password, ...rest }) => rest),
+          loginGuard: guard.snapshot(),
         }, null, 2));
       }
 
@@ -273,6 +420,7 @@ function startPanel({ stats, store, config }) {
         message,
         ftpInfo,
         staleAfterMinutes,
+        guardRows: guard.snapshot(),
       }));
     } catch (err) {
       console.error('[panel] hata:', err.message);

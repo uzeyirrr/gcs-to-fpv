@@ -45,6 +45,10 @@ const config = {
   // Yuklemeleri kullanicinin kokunun altinda gun klasorune ayir
   autoDate: (process.env.AUTO_DATE_PATH || 'true') !== 'false',
   timezone: process.env.TIMEZONE || 'Europe/Istanbul',
+  guard: {
+    maxFailures: parseInt(process.env.FTP_MAX_FAILED || '10', 10),
+    banMinutes: parseInt(process.env.FTP_BAN_MINUTES || '15', 10),
+  },
   stats: {
     enabled: (process.env.STATS_ENABLED || 'true') !== 'false',
     port: parseInt(process.env.STATS_PORT || '8080', 10),

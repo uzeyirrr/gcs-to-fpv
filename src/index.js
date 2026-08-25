@@ -8,6 +8,7 @@ const { S3FileSystem } = require('./s3fs');
 const { Stats, dateStamp } = require('./stats');
 const { UserStore } = require('./store');
 const { startPanel } = require('./panel');
+const { LoginGuard } = require('./guard');
 
 const client = new S3Client({
   endpoint: config.s3.endpoint,
@@ -21,6 +22,7 @@ const client = new S3Client({
 
 const stats = new Stats({ timezone: config.timezone });
 const store = new UserStore({ client, bucket: config.s3.bucket, prefix: config.s3.prefix });
+const guard = new LoginGuard(config.guard);
 
 const ftpServer = new FtpSrv({
   url: `ftp://${config.ftp.host}:${config.ftp.port}`,
@@ -33,14 +35,29 @@ const ftpServer = new FtpSrv({
 });
 
 ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
+  const ip = connection.ip;
+
+  // Kameralar sabit IP'den gelmedigi icin port herkese acik; kaba kuvvet denemeleri
+  // ayni IP'den ust uste basarisiz girisle engellenir.
+  if (guard.isBanned(ip)) {
+    stats.failedLogin(username);
+    console.warn(`[ftp] engelli IP reddedildi: ${ip} (${username})`);
+    return reject(new Error('Cok fazla basarisiz deneme, gecici olarak engellendiniz'));
+  }
+
   const account = store.verify(username, password);
 
   if (!account) {
     stats.failedLogin(username);
-    console.warn(`[ftp] reddedildi: ${username} (${connection.ip})`);
+    const yeniEngel = guard.fail(ip, username);
+    console.warn(
+      `[ftp] reddedildi: ${username} (${ip})` +
+      (yeniEngel ? ` -> ${config.guard.banMinutes} dk engellendi` : '')
+    );
     return reject(new Error('Kullanici adi veya parola hatali'));
   }
 
+  guard.succeed(ip);
   stats.login(account.username, connection.ip);
   console.log(`[ftp] giris: ${account.username} (${connection.ip})`);
 
@@ -115,6 +132,10 @@ async function main() {
   console.log(
     `[ftp] gun klasoru: ${config.autoDate ? 'acik' : 'kapali'} (${config.timezone}, bugun ${dateStamp(config.timezone)})`
   );
+  console.log(
+    `[ftp] kaba kuvvet korumasi: ${config.guard.maxFailures} basarisiz deneme -> ` +
+    `${config.guard.banMinutes} dk engel`
+  );
   console.log(`[ftp] tanimli kamera sayisi: ${store.list().length}`);
   for (const u of store.list()) {
     const base = config.s3.prefix + u.dir;
@@ -124,7 +145,13 @@ async function main() {
   }
 
   if (config.stats.enabled) {
-    await startPanel({ stats, store, config });
+    await startPanel({
+      stats,
+      store,
+      config,
+      guard,
+      s3: { client, bucket: config.s3.bucket },
+    });
     const auth = config.stats.user && config.stats.pass ? 'parola korumali' : 'PAROLASIZ';
     console.log(`[panel] yonetim paneli: http://0.0.0.0:${config.stats.port}/ (${auth})`);
     if (!config.stats.user || !config.stats.pass) {
@@ -132,6 +159,9 @@ async function main() {
     }
   }
 }
+
+// Engel kayitlari bellekte sinirsiz birikmesin
+setInterval(() => guard.sweep(), 10 * 60 * 1000).unref();
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {

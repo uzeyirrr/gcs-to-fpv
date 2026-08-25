@@ -215,3 +215,32 @@ erişebilen zaten tüm kamera görüntülerine erişebilmektedir.
 
 `STATS_USER`/`STATS_PASS` paneli korur — panelden FTP hesabı açılabildiği için bu **zorunlu**
 sayılmalıdır. Panel HTTP olduğundan Dokploy'da bu Compose servisine domain tanımlanabilir.
+
+## Galeri
+
+Panelde **Galeriyi aç** ile kamera → gün → görüntü şeklinde gezilir. Görseller GCS'ten panel
+üzerinden akıtılır; bucket herkese açık hale getirilmez ve paylaşılabilir kalıcı bağlantı oluşmaz —
+galeriye erişim panelin kendi parolasıyla korunur.
+
+- Kamera saat gibi alt klasörler açtıysa onlar da aynı günün içinde listelenir
+- Sayfa başına 120 dosya, devamı "Sonraki sayfa" ile gelir
+- Küçük resme tıklayınca tam boy açılır; videolar için aralıklı (range) indirme desteklenir
+- `/dosya` yalnızca tanımlı kamera klasörlerinin altındaki dosyaları verir; `_system/users.json`
+  gibi dosyalar ve `..` içeren yollar reddedilir
+
+## Kaba kuvvet koruması
+
+Kameralar sabit IP'den bağlanmadığı için FTP portu herkese açık kalmak zorunda. Bu yüzden aynı
+IP'den üst üste başarısız giriş yapanlar geçici olarak engellenir:
+
+| Ayar | Varsayılan | Anlamı |
+|---|---|---|
+| `FTP_MAX_FAILED` | 10 | Kaç başarısız denemeden sonra engel |
+| `FTP_BAN_MINUTES` | 15 | Engel süresi (dakika) |
+
+Başarılı giriş sayacı sıfırlar; parolasını bir kez yanlış giren kamera cezalandırılmaz. Engelliyken
+doğru parola da kabul edilmez. Panelde "Başarısız giriş denemeleri" tablosunda hangi IP'nin hangi
+kullanıcı adını denediği görünür ve engel elle kaldırılabilir.
+
+Bu bir güvenlik duvarı yerine geçmez, sadece parola denemesini yavaşlatır. Şifrelemeyi (FTPS) ve
+mümkünse IP kısıtlamasını hâlâ değerlendirin.
