@@ -6,6 +6,12 @@ services:
       - "${FTP_PORT:-21}:${FTP_PORT:-21}"
       # Pasif mod veri portlari 1:1 eslenmeli (aralik Dockerfile/env ile ayni olmali)
       - "50000-50099:50000-50099"
+    expose:
+      # Izleme paneli - dogrudan disari acilmaz, Dokploy'da bu servise domain
+      # tanimlarsaniz Traefik 8080'e yonlendirir (HTTPS, Cloudflare uyumlu).
+      - "8080"
+    networks:
+      - dokploy-network
     environment:
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_BUCKET: ${S3_BUCKET}
@@ -19,6 +25,19 @@ services:
       FTP_PASV_URL: ${FTP_PASV_URL}
       FTP_PASV_MIN: 50000
       FTP_PASV_MAX: 50099
-      FTP_USER: ${FTP_USER}
-      FTP_PASS: ${FTP_PASS}
+      FTP_USER: ${FTP_USER:-}
+      FTP_PASS: ${FTP_PASS:-}
       FTP_ANONYMOUS: ${FTP_ANONYMOUS:-false}
+      # Her kameraya ayri kullanici: cam01:parola1,cam02:parola2
+      FTP_USERS: ${FTP_USERS:-}
+      AUTO_DATE_PATH: ${AUTO_DATE_PATH:-true}
+      TIMEZONE: ${TIMEZONE:-Europe/Istanbul}
+      STATS_ENABLED: ${STATS_ENABLED:-true}
+      STATS_PORT: 8080
+      STATS_USER: ${STATS_USER:-}
+      STATS_PASS: ${STATS_PASS:-}
+      STATS_STALE_MINUTES: ${STATS_STALE_MINUTES:-30}
+
+networks:
+  dokploy-network:
+    external: true

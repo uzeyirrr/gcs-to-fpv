@@ -2,6 +2,8 @@
 
 require('dotenv').config();
 
+const { parseUsers } = require('./users');
+
 function req(name) {
   const v = process.env[name];
   if (!v) throw new Error(`.env icinde ${name} tanimli degil`);
@@ -34,6 +36,21 @@ const config = {
     anonymous: (process.env.FTP_ANONYMOUS || 'false') === 'true',
     user: process.env.FTP_USER || 'gcs',
     pass: process.env.FTP_PASS || 'gcs',
+  },
+  // Her kameraya ayri kullanici + kendi klasoru
+  users: parseUsers(process.env.FTP_USERS, {
+    fallbackUser: process.env.FTP_USER || 'gcs',
+    fallbackPass: process.env.FTP_PASS || 'gcs',
+  }),
+  // Yuklemeleri kullanicinin kokunun altinda gun klasorune ayir
+  autoDate: (process.env.AUTO_DATE_PATH || 'true') !== 'false',
+  timezone: process.env.TIMEZONE || 'Europe/Istanbul',
+  stats: {
+    enabled: (process.env.STATS_ENABLED || 'true') !== 'false',
+    port: parseInt(process.env.STATS_PORT || '8080', 10),
+    user: process.env.STATS_USER || '',
+    pass: process.env.STATS_PASS || '',
+    staleAfterMinutes: parseInt(process.env.STATS_STALE_MINUTES || '30', 10),
   },
 };
 

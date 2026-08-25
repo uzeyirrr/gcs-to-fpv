@@ -137,3 +137,51 @@ Notlar:
   ekleyip (ör. 30 günden eski nesneleri sil ya da Nearline'a taşı) depolama maliyetini sınırlayın.
 - Kamera her yüklemeden önce klasörü `MKD` ile oluşturmaya çalışıp hata alabilir; bu normaldir,
   klasör zaten varsa köprü işlemi sorunsuz sürdürür.
+
+## Her kameraya ayrı kullanıcı ve gün klasörü
+
+### Kullanıcılar
+
+`FTP_USERS` ile her kameraya ayrı hesap tanımlanır:
+
+```
+FTP_USERS=cam01:parola1,cam02:parola2,giris:parola3:giris-kamerasi
+```
+
+Biçim `kullanıcı:parola[:klasör]`. Klasör verilmezse kullanıcı adı klasör olur. **Her kullanıcı
+yalnızca kendi klasörünü görür** — `..` ile üst dizine çıkma reddedilir, diğer kameraların
+dosyaları listelenemez.
+
+`FTP_USERS` boş bırakılırsa eski tek kullanıcılı davranış (`FTP_USER`/`FTP_PASS`) geçerli kalır.
+
+### Gün klasörleri
+
+`AUTO_DATE_PATH=true` (varsayılan) iken yüklemeler kullanıcının klasörü altında güne göre ayrılır.
+Bunu **sunucu** yapar, kameranın ayarına bakmaz:
+
+| Kamera ne yaparsa | GCS'te nereye yazılır |
+|---|---|
+| `STOR snap.jpg` (düz) | `cam01/2026-08-25/snap.jpg` |
+| `MKD kapi` + `STOR snap.jpg` | `cam01/2026-08-25/kapi/snap.jpg` |
+
+Tarih `TIMEZONE` (varsayılan `Europe/Istanbul`) saat dilimine göre hesaplanır, gece yarısı
+kendiliğinden yeni klasöre geçer. Kamera dosyayı yazdığı yolda `SIZE`/`MDTM` ile arasa bile
+köprü tarihli karşılığına düşerek doğru cevap verir.
+
+Kameranın kendisi zaten tarih klasörü oluşturuyorsa iç içe tarih (`2026-08-25/2026-08-25/`)
+oluşmaması için ya kameranın klasör şablonunu kapatın ya da `AUTO_DATE_PATH=false` yapın.
+
+### İzleme paneli
+
+Sunucu, 8080 portunda kamera başına durum sayfası yayınlar:
+
+- Durum: Bağlı / Çalışıyor / **Sessiz** (`STATS_STALE_MINUTES` dakikadır yükleme yok) / Hiç yüklemedi
+- Son yükleme zamanı ve dosya yolu
+- Bugünkü ve toplam dosya sayısı + boyut
+- Son bağlanan IP, başarısız giriş denemeleri, son hata
+
+`/stats.json` aynı veriyi JSON verir (izleme sistemine bağlamak için), `/health` sağlık kontrolü.
+`STATS_USER`/`STATS_PASS` verilmezse panel **parolasızdır** — mutlaka doldurun.
+
+Panel HTTP olduğu için Dokploy'da bu Compose servisine domain tanımlayabilirsiniz; Traefik
+8080'e yönlendirir ve HTTPS/Cloudflare sorunsuz çalışır (FTP'nin aksine).

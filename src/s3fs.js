@@ -13,6 +13,7 @@ const {
   CopyObjectCommand,
 } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
+const { dateStamp } = require('./stats');
 
 const DIR_MODE = 0o40755;
 const FILE_MODE = 0o100644;
@@ -55,11 +56,24 @@ function statLike({ name, size = 0, mtime = new Date(), isDir = false }) {
  * Bucket icindeki "/" ile biten anahtarlar klasor olarak yorumlanir.
  */
 class S3FileSystem extends FileSystem {
-  constructor(connection, { client, bucket, prefix = '' }) {
+  constructor(connection, {
+    client,
+    bucket,
+    prefix = '',
+    autoDate = false,
+    timezone = 'UTC',
+    stats = null,
+    username = '',
+  }) {
     super(connection, { root: '/', cwd: '/' });
     this.client = client;
     this.bucket = bucket;
+    // prefix = global S3_PREFIX + kullanicinin kendi klasoru; kullanici bunun disina cikamaz
     this.prefix = prefix;
+    this.autoDate = autoDate;
+    this.timezone = timezone;
+    this.stats = stats;
+    this.username = username;
     this.cwd = '/';
   }
 
@@ -80,6 +94,16 @@ class S3FileSystem extends FileSystem {
   /** Sanal yolu bucket anahtarina cevirir (bastaki "/" atilir, prefix eklenir). */
   _key(virtualPath) {
     return this.prefix + virtualPath.replace(/^\/+/, '');
+  }
+
+  /**
+   * Yukleme anahtari: AUTO_DATE_PATH acikken kullanicinin kokunun hemen altina
+   * gunun tarihi eklenir. "/x.jpg" -> "<kullanici>/2026-08-25/x.jpg"
+   */
+  _uploadKey(virtualPath) {
+    if (!this.autoDate) return this._key(virtualPath);
+    const rel = virtualPath.replace(/^\/+/, '');
+    return this.prefix + dateStamp(this.timezone) + '/' + rel;
   }
 
   /** Klasor listelemesi icin kullanilacak anahtar oneki. */
@@ -136,6 +160,21 @@ class S3FileSystem extends FileSystem {
     // Acik klasor isaretcisi ("key/") ya da altinda nesne bulunan ortuk klasor
     if (await this._hasChildren(key + '/')) {
       return statLike({ name, isDir: true });
+    }
+
+    // AUTO_DATE_PATH acikken kamera dosyayi yazdigi yolda arar; gercek nesne
+    // tarih klasorunun altindadir. SIZE/MDTM sorgulari bosa dusmesin diye
+    // ayni yolu bir de tarihli haliyle deniyoruz.
+    if (this.autoDate) {
+      const datedHead = await this._headObject(this._uploadKey(virtualPath));
+      if (datedHead) {
+        return statLike({
+          name,
+          size: Number(datedHead.ContentLength || 0),
+          mtime: datedHead.LastModified || new Date(),
+          isDir: false,
+        });
+      }
     }
 
     throw enoent(virtualPath);
@@ -225,8 +264,11 @@ class S3FileSystem extends FileSystem {
     }
 
     const virtualPath = this._resolve(fileName);
-    const key = this._key(virtualPath);
+    const key = this._uploadKey(virtualPath);
     const body = new PassThrough();
+    const stats = this.stats;
+    const username = this.username;
+    let bytes = 0;
 
     const upload = new Upload({
       client: this.client,
@@ -243,6 +285,7 @@ class S3FileSystem extends FileSystem {
     // 'finish' olayini upload tamamlanana kadar geciktiriyoruz.
     const stream = new Writable({
       write(chunk, encoding, callback) {
+        bytes += chunk.length;
         if (!body.write(chunk, encoding)) {
           body.once('drain', callback);
         } else {
@@ -251,7 +294,16 @@ class S3FileSystem extends FileSystem {
       },
       final(callback) {
         body.end();
-        uploadPromise.then(() => callback(), callback);
+        uploadPromise.then(
+          () => {
+            if (stats) stats.upload(username, key, bytes);
+            callback();
+          },
+          (err) => {
+            if (stats) stats.error(username, `Yukleme hatasi (${key}): ${err.message}`);
+            callback(err);
+          }
+        );
       },
       destroy(err, callback) {
         if (err) body.destroy(err);
