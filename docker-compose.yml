@@ -1,0 +1,24 @@
+services:
+  gcs-ftp:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${FTP_PORT:-21}:${FTP_PORT:-21}"
+      # Pasif mod veri portlari 1:1 eslenmeli (aralik Dockerfile/env ile ayni olmali)
+      - "50000-50019:50000-50019"
+    environment:
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET: ${S3_SECRET}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      S3_PREFIX: ${S3_PREFIX:-}
+      FTP_HOST: 0.0.0.0
+      FTP_PORT: ${FTP_PORT:-21}
+      FTP_PASV_URL: ${FTP_PASV_URL}
+      FTP_PASV_MIN: 50000
+      FTP_PASV_MAX: 50019
+      FTP_USER: ${FTP_USER}
+      FTP_PASS: ${FTP_PASS}
+      FTP_ANONYMOUS: ${FTP_ANONYMOUS:-false}
