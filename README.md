@@ -90,7 +90,7 @@ host üzerinde yayınlamak gerekir. Bu yüzden repoda `docker-compose.yml` var.
    - `S3_ACCESS_KEY` / `S3_SECRET` → GCS HMAC anahtarınız.
 3. Sunucunun güvenlik duvarında şu portları açın:
    - `21/tcp` (kontrol kanalı)
-   - `50000-50019/tcp` (pasif veri kanalı)
+   - `50000-50099/tcp` (pasif veri kanalı)
 4. Deploy edin. Logda `[gcs] bucket erisimi dogrulandi` ve `[ftp] dinleniyor` satırlarını görün.
 
 Bağlantı: `ftp://SUNUCU_IP:21`, pasif mod, `.env`'deki kullanıcı/parola.
@@ -102,3 +102,38 @@ Bağlantı: `ftp://SUNUCU_IP:21`, pasif mod, `.env`'deki kullanıcı/parola.
 ### Port 21 yerine başka port
 
 `FTP_PORT` değişkenini değiştirmeniz yeterli; compose dosyası aynı portu host'ta yayınlar.
+
+## IP kamera bağlarken
+
+Köprü, kameraların tipik akışıyla test edildi: aktif mod (`PORT`), `TYPE I`, seviye seviye
+`MKD` + `CWD` ile tarih bazlı klasör oluşturma, `STOR`, `LIST`, `RETR`, `MDTM`, `SIZE`, `FEAT`.
+
+**Kamerayı pasif moda alın.** Kameralar varsayılan olarak aktif mod kullanır; aktif modda
+*sunucu kameraya* veri bağlantısı açar. Kamera bir NAT/router arkasındaysa (sahadaki kurulumların
+neredeyse tamamı) bulut sunucusu kameraya ulaşamaz ve aktarım yarıda kalır. Kamerada
+"Passive / PASV / Pasif mod" seçeneği varsa işaretleyin.
+
+Kamera arayüzüne girilecekler:
+
+```
+Sunucu / Server IP : sunucunun genel IP'si (veya A kaydı verdiğiniz domain)
+Port               : 21
+Kullanıcı / Parola : FTP_USER / FTP_PASS
+Dizin / Directory  : / (veya cam01 gibi bir alt klasör)
+Mod                : Passive
+```
+
+Notlar:
+
+- **Parolayı sade tutun** (harf + rakam). Bazı kamera firmware'leri `@ : / #` gibi karakterleri
+  FTP alanında bozuk gönderiyor.
+- **Port 21'i değiştirmeyin** mümkünse; çoğu kamera arayüzü farklı port kabul etse de bazıları
+  yalnızca 21'e bağlanır.
+- **Pasif port aralığı** `50000-50099` (100 port). Tek kamera için fazlasıyla yeterli; çok sayıda
+  kamerayı aynı anda bağlayacaksanız aralığı genişletin.
+- **Şifreleme yok.** Kamera parolası ve görüntüler düz metin gider. Kameranın sabit bir çıkış
+  IP'si varsa güvenlik duvarında 21 ve 50000-50099 portlarını yalnızca o IP'ye açın.
+- **Maliyet:** kameralar sürekli dosya üretir. GCS tarafında bucket'a bir **Lifecycle kuralı**
+  ekleyip (ör. 30 günden eski nesneleri sil ya da Nearline'a taşı) depolama maliyetini sınırlayın.
+- Kamera her yüklemeden önce klasörü `MKD` ile oluşturmaya çalışıp hata alabilir; bu normaldir,
+  klasör zaten varsa köprü işlemi sorunsuz sürdürür.
