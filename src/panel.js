@@ -3,7 +3,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { dateStamp } = require('./stats');
-const { listDays, listDayFiles, streamObject } = require('./gallery');
+const { listDays, listDayFiles, streamObject, deleteObjects } = require('./gallery');
 
 function humanBytes(n) {
   if (!n) return '0 B';
@@ -96,6 +96,9 @@ a{color:#6bb8ff}
   text-overflow:ellipsis;white-space:nowrap}
 .vid{display:flex;align-items:center;justify-content:center;height:140px;
   background:#0b0d12;color:#6bb8ff;font-size:13px}
+.tile .pick{display:flex;align-items:center;gap:6px;padding:6px 9px 0;font-size:12px;
+  color:#8b93a7;cursor:pointer}
+.tile .pick input{width:15px;height:15px;padding:0;accent-color:#1f6feb}
 `;
 
 function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, guardRows = [] }) {
@@ -122,7 +125,10 @@ function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, gua
   <td><code>${esc(u.username)}</code><br><code>${esc(u.password)}</code></td>
   <td>${ago(c.lastUploadAt)}<br><span class="dim">${esc(c.lastUploadPath || '—')}</span></td>
   <td>${c.uploadsToday || 0}<br><span class="dim">${humanBytes(c.bytesToday || 0)}</span></td>
-  <td>${c.uploadsTotal || 0}<br><span class="dim">${humanBytes(c.bytesTotal || 0)}</span></td>
+  <td>${c.uploadsTotal || 0}<br><span class="dim">${humanBytes(c.bytesTotal || 0)}</span>${
+    c.deletesTotal
+      ? `<br><span class="dim">${c.deletesTotal} silindi · ${humanBytes(c.deletedBytesTotal || 0)}</span>`
+      : ''}</td>
   <td>${esc(c.lastLoginIp || '—')}<br><span class="dim">${ago(c.lastLoginAt)}</span></td>
   <td>${c.lastError ? `<span class="err">${esc(c.lastError)}</span><br><span class="dim">${ago(c.lastErrorAt)}</span>` : '—'}</td>
   <td><div class="acts">
@@ -202,7 +208,8 @@ ${guardRows.length ? `<h2>Başarısız giriş denemeleri</h2>
 </tr>`).join('')}</tbody></table></div>` : ''}
 
 <div class="dim" style="margin-top:18px">
-  "Sessiz" = ${staleAfterMinutes} dakikadır yükleme yok · Sayfa otomatik yenilenmez, güncellemek için
+  "Sessiz" = ${staleAfterMinutes} dakikadır yükleme yok · "Toplam" sayaçlarından galeriden silinenler
+  düşülür · Sayfa otomatik yenilenmez, güncellemek için
   <a href="/" style="color:#6bb8ff">yenileyin</a>
 </div>
 
@@ -211,7 +218,7 @@ ${guardRows.length ? `<h2>Başarısız giriş denemeleri</h2>
 
 
 function renderGallery({ cameras, selected, days, day, files, hours, hour,
-                        offset, pageSize, total, truncated }) {
+                        offset, pageSize, total, truncated, message }) {
   const camNav = cameras.map((c) =>
     `<a href="/galeri?kamera=${encodeURIComponent(c.username)}"
         class="${c.username === selected ? 'sel' : ''}">${esc(c.label || c.username)}</a>`
@@ -238,6 +245,7 @@ function renderGallery({ cameras, selected, days, day, files, hours, hour,
       : `<div class="vid">▶ video</div>`;
     const when = f.time || '';
     return `<div class="tile">
+  <label class="pick"><input type="checkbox" name="k" value="${esc(f.key)}"> seç</label>
   <a href="${src}" target="_blank" rel="noopener">${inner}</a>
   <div class="meta"><b title="${esc(f.name)}">${esc(f.name)}</b>
     <span class="dim">${esc(when)} · ${humanBytes(f.size)}</span></div>
@@ -269,13 +277,41 @@ function renderGallery({ cameras, selected, days, day, files, hours, hour,
   } else if (!files.length) {
     body = '<div class="dim">Bu günde görüntülenebilir dosya yok.</div>';
   } else {
-    body = `<div class="grid">${tiles}</div>${more}${prev}`;
+    const geri = `${base}${saatQ}${offset ? `&s=${offset}` : ''}`;
+    body = `<form method="post" action="/galeri/sil" id="silForm"
+      onsubmit="return galeriOnayla(this)">
+  <input type="hidden" name="geri" value="${esc(geri)}">
+  <div class="row" style="margin-top:14px">
+    <label class="chip" style="cursor:pointer">
+      <input type="checkbox" onchange="galeriTumu(this.checked)"> Bu sayfada tümünü seç</label>
+    <button class="danger" type="submit">Seçilenleri sil</button>
+    <span class="dim" id="silSayac">0 dosya seçili</span>
+  </div>
+  <div class="grid">${tiles}</div>
+</form>${more}${prev}
+<script>
+function galeriKutular(){return document.querySelectorAll('#silForm input[name=k]')}
+function galeriSayac(){
+  var n=document.querySelectorAll('#silForm input[name=k]:checked').length;
+  document.getElementById('silSayac').textContent=n+' dosya seçili';
+}
+function galeriTumu(v){galeriKutular().forEach(function(c){c.checked=v});galeriSayac()}
+function galeriOnayla(f){
+  var n=f.querySelectorAll('input[name=k]:checked').length;
+  if(!n){alert('Önce silinecek dosyaları seçin.');return false}
+  return confirm(n+' dosya GCS'ten kalıcı olarak silinecek. Onaylıyor musunuz?');
+}
+document.addEventListener('change',function(e){
+  if(e.target && e.target.name==='k') galeriSayac();
+});
+</script>`;
   }
 
   return `<!doctype html><html lang="tr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Galeri — Kamera FTP</title>
 <style>${STYLE}</style></head><body><div class="wrap">
+${message ? `<div class="msg ${message.kind === 'bad' ? 'bad' : 'good'}">${esc(message.text)}</div>` : ''}
 <div class="bar">
   <div><h1>Galeri</h1>
     <div class="dim">${esc(selected || '')}${day ? ' · ' + esc(day) : ''}${hour ? ' · ' + esc(hour) + ':00' : ''}${total ? ' · ' + total + ' dosya' : ''}</div>
@@ -361,6 +397,50 @@ function startPanel({ stats, store, config, s3, guard }) {
     res.end();
   };
 
+  /**
+   * Galeriye geri doner. `geri` istemciden geldigi icin acik yonlendirmeye
+   * donusmemesi adina yalnizca kendi galeri yolumuz kabul edilir.
+   */
+  const galeriDon = (res, geri, kind, text) => {
+    const id = flash.put(kind === 'ok' ? 'good' : 'bad', text);
+    const hedef = typeof geri === 'string' && /^\/galeri(\?|$)/.test(geri) ? geri : '/galeri';
+    res.writeHead(303, { location: `${hedef}${hedef.includes('?') ? '&' : '?'}m=${id}` });
+    res.end();
+  };
+
+  /**
+   * Bir bucket anahtarina panel uzerinden dokunulabilir mi? Yalnizca tanimli
+   * kamera klasorlerinin altindaki dosyalar okunabilir/silinebilir;
+   * _system/users.json gibi kayitlar (parolalar dahil) hicbir kosulda gecemez.
+   * Tek kullanicili modda kullanicinin kokü prefix'in kendisidir, bu yuzden
+   * store.key acik olarak disarida birakilir.
+   */
+  const anahtarIzinli = (key) => {
+    if (!key || key.includes('..') || key === store.key) return false;
+    if (key.endsWith('/')) return false;
+    return store.list().some((u) => key.startsWith(config.s3.prefix + u.dir));
+  };
+
+  /**
+   * Bir anahtarin hangi kameraya ve hangi gun klasorune ait oldugunu bulur.
+   * Tek kullanicili modda kullanicinin dir'i bos olabilecegi icin en uzun
+   * eslesen klasor secilir.
+   */
+  const anahtarSahibi = (key) => {
+    let sahip = null;
+    let base = '';
+    for (const u of store.list()) {
+      const kok = config.s3.prefix + u.dir;
+      if (key.startsWith(kok) && kok.length >= base.length) {
+        sahip = u;
+        base = kok;
+      }
+    }
+    if (!sahip) return null;
+    const gun = key.slice(base.length).split('/')[0] || null;
+    return { username: sahip.username, day: /^\d{4}-\d{2}-\d{2}$/.test(gun) ? gun : null };
+  };
+
   const server = http.createServer(async (req, res) => {
     try {
       if (req.url === '/health') {
@@ -386,6 +466,54 @@ function startPanel({ stats, store, config, s3, guard }) {
           );
           res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
           return res.end('Istek reddedildi: gecersiz kaynak');
+        }
+
+        if (url.pathname === '/galeri/sil') {
+          try {
+            // Bir sayfa dolusu anahtar tasindigi icin govde siniri genis tutuluyor.
+            const body = await readBody(req, 512 * 1024);
+            const istenen = body.getAll('k').filter(Boolean);
+            const gecerli = istenen.filter(anahtarIzinli);
+
+            if (!istenen.length) {
+              return galeriDon(res, body.get('geri'), 'hata', 'Silinecek dosya seçilmedi.');
+            }
+            if (gecerli.length !== istenen.length) {
+              console.warn(`[panel] galeri silme: ${istenen.length - gecerli.length} izinsiz anahtar reddedildi`);
+              return galeriDon(res, body.get('geri'), 'hata',
+                'İstek reddedildi: erişilemeyen dosya anahtarı var.');
+            }
+
+            const { deleted, failed } = await deleteObjects(s3.client, s3.bucket, gecerli);
+
+            // Sayaclar kamera ve gun bazinda toplanip tek seferde islenir.
+            const gruplar = new Map();
+            for (const { key, size } of deleted) {
+              const sahip = anahtarSahibi(key);
+              if (!sahip) continue;
+              const id = `${sahip.username} ${sahip.day || ''}`;
+              const g = gruplar.get(id) || { username: sahip.username, day: sahip.day, count: 0, bytes: 0 };
+              g.count += 1;
+              g.bytes += size;
+              gruplar.set(id, g);
+            }
+            for (const g of gruplar.values()) {
+              stats.deleted(g.username, { count: g.count, bytes: g.bytes, day: g.day });
+            }
+
+            const toplamBayt = deleted.reduce((n, d) => n + d.size, 0);
+            console.log(`[panel] galeriden silindi: ${deleted.length} dosya / ${humanBytes(toplamBayt)}` +
+              (failed.length ? `, ${failed.length} basarisiz` : ''));
+
+            return failed.length
+              ? galeriDon(res, body.get('geri'), 'hata',
+                  `${deleted.length} dosya silindi (${humanBytes(toplamBayt)}), ` +
+                  `${failed.length} tanesi silinemedi (${failed[0].error}).`)
+              : galeriDon(res, body.get('geri'), 'ok',
+                  `${deleted.length} dosya silindi (${humanBytes(toplamBayt)}).`);
+          } catch (err) {
+            return galeriDon(res, null, 'hata', err.message);
+          }
         }
 
         const body = await readBody(req);
@@ -436,16 +564,7 @@ function startPanel({ stats, store, config, s3, guard }) {
 
       if (url.pathname === '/dosya') {
         const key = url.searchParams.get('k') || '';
-        // Yalnizca tanimli kamera klasorlerinin altindaki dosyalar okunabilir;
-        // _system/users.json gibi dosyalar bu kontrolden gecemez.
-        const izinli = store.list().some(
-          (u) => key.startsWith(config.s3.prefix + u.dir)
-        );
-        // Kullanici kayitlari (parolalar dahil) hicbir kosulda servis edilmez.
-        // Tek kullanicili modda kullanicinin kokü prefix'in kendisidir, bu yuzden
-        // acik olarak disariyor.
-        const yasak = key === store.key;
-        if (!izinli || yasak || key.includes('..')) {
+        if (!anahtarIzinli(key)) {
           res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
           return res.end('Bu dosyaya erisim yok');
         }
@@ -453,6 +572,8 @@ function startPanel({ stats, store, config, s3, guard }) {
       }
 
       if (url.pathname === '/galeri') {
+        const galeriMesajId = url.searchParams.get('m');
+        const galeriMesaj = galeriMesajId ? flash.take(galeriMesajId) : null;
         const cameras = store.list();
         const istenen = url.searchParams.get('kamera');
         const secili = cameras.find((c) => c.username === istenen) || cameras[0];
@@ -462,6 +583,7 @@ function startPanel({ stats, store, config, s3, guard }) {
           return res.end(renderGallery({
             cameras: [], selected: '', days: [], day: '', files: [],
             hours: [], hour: '', offset: 0, pageSize: PAGE, total: 0, truncated: false,
+            message: galeriMesaj,
           }));
         }
 
@@ -486,7 +608,11 @@ function startPanel({ stats, store, config, s3, guard }) {
         const saat = hours.some(([h]) => h === istenenSaat) ? istenenSaat : '';
         const suzulmus = saat ? tumu.filter((f) => f.hour === saat) : tumu;
 
-        const offset = Math.max(0, parseInt(url.searchParams.get('s') || '0', 10) || 0);
+        // Silme sonrasi dosya sayisi azalmis olabilir; bos sayfada kalinmasin.
+        const istenenOffset = Math.max(0, parseInt(url.searchParams.get('s') || '0', 10) || 0);
+        const offset = istenenOffset < suzulmus.length
+          ? istenenOffset
+          : Math.max(0, (Math.ceil(suzulmus.length / PAGE) - 1) * PAGE);
         const sayfa = suzulmus.slice(offset, offset + PAGE);
 
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -502,6 +628,7 @@ function startPanel({ stats, store, config, s3, guard }) {
           pageSize: PAGE,
           total: suzulmus.length,
           truncated,
+          message: galeriMesaj,
         }));
       }
 

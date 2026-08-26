@@ -29,6 +29,9 @@ function emptyCamera(username, dir) {
     bytesToday: 0,
     uploadsTotal: 0,
     bytesTotal: 0,
+    deletesTotal: 0,
+    deletedBytesTotal: 0,
+    lastDeleteAt: null,
     failedLogins: 0,
     lastError: null,
     lastErrorAt: null,
@@ -91,6 +94,29 @@ class Stats {
     c.bytesTotal += bytes;
     c.lastUploadAt = new Date().toISOString();
     c.lastUploadPath = key;
+  }
+
+  /**
+   * Panelden silinen dosyalari sayaclara isler. Silinenler hem ayri bir sayacta
+   * tutulur hem de yukleme toplamlarindan dusulur; boylece panelde gorunen
+   * rakamlar bucket'ta duran dosyalari yansitir. Dosya bugunun klasorunden
+   * silindiyse gunluk sayaclar da dusulur. Sunucu yeniden basladiginda sayaclar
+   * zaten sifirlandigi icin negatife dusmemesi adina taban 0'da tutulur.
+   */
+  deleted(username, { count = 0, bytes = 0, day = null } = {}) {
+    if (!count) return;
+    const c = this._get(username);
+    c.deletesTotal += count;
+    c.deletedBytesTotal += bytes;
+    c.lastDeleteAt = new Date().toISOString();
+
+    c.uploadsTotal = Math.max(0, c.uploadsTotal - count);
+    c.bytesTotal = Math.max(0, c.bytesTotal - bytes);
+
+    if (day && day === dateStamp(this.timezone)) {
+      c.uploadsToday = Math.max(0, c.uploadsToday - count);
+      c.bytesToday = Math.max(0, c.bytesToday - bytes);
+    }
   }
 
   error(username, message) {

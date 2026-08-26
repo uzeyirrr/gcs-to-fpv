@@ -1,7 +1,9 @@
 'use strict';
 
 const path = require('path').posix;
-const { ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
+const {
+  ListObjectsV2Command, GetObjectCommand, DeleteObjectCommand, HeadObjectCommand,
+} = require('@aws-sdk/client-s3');
 const { dateStamp } = require('./stats');
 
 const IMAGE_TYPES = {
@@ -156,6 +158,46 @@ async function streamObject(client, bucket, key, req, res) {
   }
 }
 
+/**
+ * Verilen anahtarlari siler. GCS'in S3 uyumlulugu toplu silme (POST ?delete)
+ * desteklemedigi icin nesneler tek tek, sinirli eszamanlilikla silinir.
+ * Dondurulen `failed` listesi silinemeyen anahtarlari tasir.
+ */
+async function deleteObjects(client, bucket, keys, { concurrency = 8 } = {}) {
+  const kalan = [...keys];
+  const deleted = [];
+  const failed = [];
+
+  const worker = async () => {
+    for (;;) {
+      const key = kalan.shift();
+      if (key === undefined) return;
+      // Sayaclarin dusulebilmesi icin boyut silmeden once okunur; okunamazsa
+      // silme yine de yapilir, yalnizca boyut 0 sayilir.
+      let size = 0;
+      try {
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        size = Number(head.ContentLength || 0);
+      } catch (err) {
+        size = 0;
+      }
+      try {
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+        deleted.push({ key, size });
+      } catch (err) {
+        failed.push({ key, error: err.message });
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, kalan.length) }, worker)
+  );
+
+  return { deleted, failed };
+}
+
 module.exports = {
-  listDays, listDayFiles, streamObject, contentTypeFor, kindOf, hourStamp, timeStamp,
+  listDays, listDayFiles, streamObject, deleteObjects, contentTypeFor, kindOf,
+  hourStamp, timeStamp,
 };
