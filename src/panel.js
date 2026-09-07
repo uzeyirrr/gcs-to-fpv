@@ -101,7 +101,8 @@ a{color:#6bb8ff}
 .tile .pick input{width:15px;height:15px;padding:0;accent-color:#1f6feb}
 `;
 
-function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, guardRows = [] }) {
+function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, guardRows = [],
+                          pasvInfo = null, guardLimits = {} }) {
   const staleMs = staleAfterMinutes * 60 * 1000;
   const statsBy = new Map(snap.cameras.map((c) => [c.username, c]));
 
@@ -146,6 +147,46 @@ function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, gua
   </div></td>
 </tr>`;
   }).join('');
+
+  // Pasif mod portlari tukendiginde hicbir kamera dosya yukleyemez; sorun
+  // loglara bakmadan gorulebilsin diye havuz durumu panelde gosterilir.
+  const pasvKart = pasvInfo ? `<h2>Pasif mod port havuzu</h2>
+<div class="tablewrap"><table style="min-width:640px">
+<thead><tr>
+  <th>Aralık</th><th>Port</th><th>Verilen</th><th>Tükenme</th>
+  <th>Son tükenme</th><th>Son aramada dolu</th>
+</tr></thead>
+<tbody><tr>
+  <td><code>${pasvInfo.min}–${pasvInfo.max}</code></td>
+  <td>${pasvInfo.size}</td>
+  <td>${pasvInfo.granted}</td>
+  <td>${pasvInfo.exhausted
+    ? `<span class="pill kapali">${pasvInfo.exhausted}</span>`
+    : '<span class="pill ok">0</span>'}</td>
+  <td>${pasvInfo.lastExhaustedAt ? ago(pasvInfo.lastExhaustedAt) : '—'}</td>
+  <td>${pasvInfo.lastBusy} / ${pasvInfo.size}</td>
+</tr></tbody></table></div>
+${pasvInfo.exhausted ? `<div class="dim" style="margin-top:8px">
+  Havuz tükendiğinde kameralar <code>PASV</code> hatası alır ve dosya yükleyemez.
+  Genelde tek bir kameranın saniyede birkaç kez yeniden bağlanmasından olur;
+  aşağıdaki yük tablosuna bakın. Kalıcıysa <code>FTP_PASV_MIN/MAX</code> aralığını
+  genişletin.</div>` : ''}` : '';
+
+  const yukRows = guardRows.filter((g) => g.open || g.throttled);
+  const yukKart = yukRows.length ? `<h2>Bağlantı yükü</h2>
+<div class="tablewrap"><table style="min-width:640px">
+<thead><tr>
+  <th>IP</th><th>Açık oturum</th><th>Giriş / dk</th><th>Reddedilen</th><th>Son ret</th>
+</tr></thead>
+<tbody>${yukRows.map((g) => `<tr>
+  <td><code>${esc(g.ip)}</code>${g.lastUser ? `<br><span class="dim">${esc(g.lastUser)}</span>` : ''}</td>
+  <td>${g.open}${guardLimits.maxPerIp ? ` <span class="dim">/ ${guardLimits.maxPerIp}</span>` : ''}</td>
+  <td>${g.loginsPerMinute}${guardLimits.maxLoginsPerMinute ? ` <span class="dim">/ ${guardLimits.maxLoginsPerMinute}</span>` : ''}</td>
+  <td>${g.throttled ? `<span class="pill kapali">${g.throttled}</span>` : '0'}</td>
+  <td>${g.lastThrottleAt ? ago(g.lastThrottleAt) : '—'}</td>
+</tr>`).join('')}</tbody></table></div>
+<div class="dim" style="margin-top:8px">Bir kamera sınırı aştığında girişi reddedilir;
+  böylece pasif mod portlarını tüketip diğer kameraları kilitlemesi önlenir.</div>` : '';
 
   const msgBlock = message
     ? `<div class="msg ${message.kind === 'bad' ? 'bad' : 'good'}">${esc(message.text)}</div>`
@@ -193,10 +234,13 @@ ${msgBlock}
 <tbody>${rows || '<tr><td colspan="9" class="dim">Henüz kamera eklenmemiş</td></tr>'}</tbody>
 </table></div>
 
-${guardRows.length ? `<h2>Başarısız giriş denemeleri</h2>
+${pasvKart}
+${yukKart}
+
+${guardRows.some((g) => g.failures || g.banned) ? `<h2>Başarısız giriş denemeleri</h2>
 <div class="tablewrap"><table style="min-width:640px">
 <thead><tr><th>IP</th><th>Durum</th><th>Deneme</th><th>Son deneme</th><th>Denenen kullanıcı</th><th></th></tr></thead>
-<tbody>${guardRows.map((g) => `<tr>
+<tbody>${guardRows.filter((g) => g.failures || g.banned).map((g) => `<tr>
   <td><code>${esc(g.ip)}</code></td>
   <td>${g.banned ? '<span class="pill kapali">Engelli</span>' : '<span class="pill yok">İzleniyor</span>'}</td>
   <td>${g.failures}</td>
@@ -382,7 +426,7 @@ function sameOrigin(req) {
   }
 }
 
-function startPanel({ stats, store, config, s3, guard }) {
+function startPanel({ stats, store, config, s3, guard, pasv = null }) {
   const { port, user, pass, staleAfterMinutes } = config.stats;
   const needsAuth = Boolean(user && pass);
   const expected = needsAuth
@@ -638,6 +682,8 @@ function startPanel({ stats, store, config, s3, guard }) {
           ...snap,
           users: store.list().map(({ password, ...rest }) => rest),
           loginGuard: guard.snapshot(),
+          guardLimits: guard.limits(),
+          pasvPool: pasv ? pasv.snapshot() : null,
         }, null, 2));
       }
 
@@ -657,6 +703,8 @@ function startPanel({ stats, store, config, s3, guard }) {
         ftpInfo,
         staleAfterMinutes,
         guardRows: guard.snapshot(),
+        guardLimits: guard.limits(),
+        pasvInfo: pasv ? pasv.snapshot() : null,
       }));
     } catch (err) {
       console.error('[panel] hata:', err.message);

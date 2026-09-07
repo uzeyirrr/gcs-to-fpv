@@ -9,6 +9,7 @@ const { Stats, dateStamp } = require('./stats');
 const { UserStore } = require('./store');
 const { startPanel } = require('./panel');
 const { LoginGuard } = require('./guard');
+const { PasvPool } = require('./pasv');
 
 const client = new S3Client({
   endpoint: config.s3.endpoint,
@@ -34,6 +35,15 @@ const ftpServer = new FtpSrv({
   file_format: 'ls',
 });
 
+// ftp-srv'nin kendi port bulucusu aralikta yalnizca 5 port dener; yerine tum
+// araligi tarayan havuz konur (bkz. pasv.js).
+const pasvPool = new PasvPool({
+  host: config.ftp.host,
+  min: config.ftp.pasvMin,
+  max: config.ftp.pasvMax,
+});
+ftpServer.getNextPasvPort = () => pasvPool.al();
+
 ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
   const ip = connection.ip;
 
@@ -43,6 +53,19 @@ ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
     stats.failedLogin(username);
     console.warn(`[ftp] engelli IP reddedildi: ${ip} (${username})`);
     return reject(new Error('Cok fazla basarisiz deneme, gecici olarak engellendiniz'));
+  }
+
+  // Parola dogru olsa da IP basina yuk sinirlanir: saniyede birkac kez yeniden
+  // baglanan tek bir kamera pasif mod portlarini tuketip digerlerini kilitler.
+  const yuk = guard.checkLoad(ip);
+  if (!yuk.ok) {
+    console.warn(
+      `[ftp] yuk siniri: ${ip} (${username}) reddedildi - ` +
+      (yuk.reason === 'concurrent'
+        ? `${yuk.current} acik oturum, sinir ${yuk.limit}`
+        : `dakikada ${yuk.current} giris, sinir ${yuk.limit}`)
+    );
+    return reject(new Error('Cok fazla es zamanli baglanti, biraz sonra tekrar deneyin'));
   }
 
   const account = store.verify(username, password);
@@ -58,6 +81,7 @@ ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
   }
 
   guard.succeed(ip);
+  guard.openSession(ip);
   stats.login(account.username, connection.ip);
   console.log(`[ftp] giris: ${account.username} (${connection.ip})`);
 
@@ -65,6 +89,7 @@ ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
   const markLogout = () => {
     if (loggedOut) return;
     loggedOut = true;
+    guard.closeSession(ip);
     stats.logout(account.username);
     console.log(`[ftp] cikis: ${account.username} (${connection.ip})`);
   };
@@ -136,6 +161,10 @@ async function main() {
     `[ftp] kaba kuvvet korumasi: ${config.guard.maxFailures} basarisiz deneme -> ` +
     `${config.guard.banMinutes} dk engel`
   );
+  console.log(
+    `[ftp] IP basina yuk siniri: ${config.guard.maxPerIp || 'sinirsiz'} es zamanli oturum, ` +
+    `${config.guard.maxLoginsPerMinute || 'sinirsiz'} giris/dk`
+  );
   console.log(`[ftp] tanimli kamera sayisi: ${store.list().length}`);
   for (const u of store.list()) {
     const base = config.s3.prefix + u.dir;
@@ -151,6 +180,7 @@ async function main() {
         store,
         config,
         guard,
+        pasv: pasvPool,
         s3: { client, bucket: config.s3.bucket },
       });
       console.log(`[panel] yonetim paneli: http://0.0.0.0:${config.stats.port}/ (parola korumali)`);

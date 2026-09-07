@@ -27,6 +27,14 @@ npm start
 | `FTP_PASV_MIN` / `FTP_PASV_MAX` | Pasif veri portu aralığı — güvenlik duvarında açık olmalı |
 | `FTP_USER` / `FTP_PASS` | FTP giriş bilgileri |
 | `FTP_ANONYMOUS` | `true` ise parolasız giriş |
+| `FTP_MAX_CONN_PER_IP` | IP başına eş zamanlı oturum sınırı (varsayılan `10`, `0` = sınırsız) |
+| `FTP_MAX_LOGINS_PER_MIN` | IP başına dakikalık giriş sınırı (varsayılan `120`, `0` = sınırsız) |
+
+> **Pasif mod portları hakkında.** Her `PASV` komutu aralıktan bir port ayırır ve kamera
+> bağlanmazsa o portu 30 saniye tutar. Saniyede birkaç kez yeniden bağlanan tek bir kamera
+> 100 portluk aralığı tüketip **diğer tüm kameraları** `Unable to find valid port` hatasına
+> düşürebilir. Son iki ayar bunu önler; havuzun doluluk durumu panelde
+> **Pasif mod port havuzu** ve **Bağlantı yükü** başlıkları altında görünür.
 
 HMAC anahtarı yoksa: Google Cloud Console → Cloud Storage → **Settings → Interoperability →
 Create a key for a service account**.

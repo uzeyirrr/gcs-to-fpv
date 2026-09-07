@@ -7,17 +7,39 @@
  *
  * Basarili girisde o IP'nin sayaci sifirlanir, boylece parolasini bir kez yanlis
  * giren kamera cezalandirilmaz.
+ *
+ * Ayrica IP basina yuk sinirlanir: dogru parolayla da olsa saniyede birkac kez
+ * yeniden baglanan tek bir kamera, her baglantida pasif mod portu tuttugu icin
+ * (bkz. pasv.js) tum port araligini yiyip diger kameralari disarida birakabilir.
  */
 class LoginGuard {
-  constructor({ maxFailures = 10, banMinutes = 15 } = {}) {
+  constructor({
+    maxFailures = 10,
+    banMinutes = 15,
+    maxPerIp = 10,
+    maxLoginsPerMinute = 120,
+  } = {}) {
     this.maxFailures = maxFailures;
     this.banMs = banMinutes * 60 * 1000;
-    this.entries = new Map(); // ip -> {failures, bannedUntil, lastAt, lastUser}
+    this.maxPerIp = maxPerIp;
+    this.maxLoginsPerMinute = maxLoginsPerMinute;
+    this.entries = new Map();
   }
 
   _entry(ip) {
     if (!this.entries.has(ip)) {
-      this.entries.set(ip, { failures: 0, bannedUntil: 0, lastAt: 0, lastUser: null });
+      this.entries.set(ip, {
+        failures: 0,
+        bannedUntil: 0,
+        lastAt: 0,
+        lastUser: null,
+        // Yuk sinirlama: acik oturum sayisi, son bir dakikanin giris zamanlari
+        // ve yuk yuzunden reddedilen istek sayaci.
+        open: 0,
+        logins: [],
+        throttled: 0,
+        lastThrottleAt: 0,
+      });
     }
     return this.entries.get(ip);
   }
@@ -52,6 +74,48 @@ class LoginGuard {
     return false;
   }
 
+  /**
+   * IP su an yeni bir oturum acabilir mi? Kimlik dogrulamadan once cagrilir;
+   * cagri basina bir giris denemesi kaydedilir.
+   *
+   * Doner: {ok:true} veya {ok:false, reason, limit, current}
+   */
+  checkLoad(ip) {
+    const e = this._entry(ip);
+    const now = Date.now();
+
+    if (this.maxPerIp > 0 && e.open >= this.maxPerIp) {
+      e.throttled += 1;
+      e.lastThrottleAt = now;
+      return { ok: false, reason: 'concurrent', limit: this.maxPerIp, current: e.open };
+    }
+
+    const pencere = now - 60 * 1000;
+    e.logins = e.logins.filter((t) => t > pencere);
+    if (this.maxLoginsPerMinute > 0 && e.logins.length >= this.maxLoginsPerMinute) {
+      e.throttled += 1;
+      e.lastThrottleAt = now;
+      return {
+        ok: false, reason: 'rate', limit: this.maxLoginsPerMinute, current: e.logins.length,
+      };
+    }
+
+    e.logins.push(now);
+    e.lastAt = now;
+    return { ok: true };
+  }
+
+  /** Basarili girisin ardindan acik oturum sayacini artirir. */
+  openSession(ip) {
+    this._entry(ip).open += 1;
+  }
+
+  /** Oturum kapandiginda sayaci duser. Ayni kapanis iki kez bildirilmemeli. */
+  closeSession(ip) {
+    const e = this.entries.get(ip);
+    if (e && e.open > 0) e.open -= 1;
+  }
+
   succeed(ip) {
     const e = this.entries.get(ip);
     if (e) {
@@ -67,9 +131,10 @@ class LoginGuard {
   /** Panelde gostermek icin: aktif engeller ve son basarisiz denemeler. */
   snapshot() {
     const now = Date.now();
+    const pencere = now - 60 * 1000;
     const rows = [];
     for (const [ip, e] of this.entries) {
-      if (!e.failures && !e.bannedUntil) continue;
+      if (!e.failures && !e.bannedUntil && !e.throttled && !e.open) continue;
       rows.push({
         ip,
         failures: e.failures,
@@ -77,9 +142,20 @@ class LoginGuard {
         bannedUntil: e.bannedUntil > now ? new Date(e.bannedUntil).toISOString() : null,
         lastAt: e.lastAt ? new Date(e.lastAt).toISOString() : null,
         lastUser: e.lastUser,
+        open: e.open,
+        loginsPerMinute: e.logins.filter((t) => t > pencere).length,
+        throttled: e.throttled,
+        lastThrottleAt: e.lastThrottleAt ? new Date(e.lastThrottleAt).toISOString() : null,
       });
     }
-    return rows.sort((a, b) => b.failures - a.failures).slice(0, 50);
+    return rows
+      .sort((a, b) => (b.throttled - a.throttled) || (b.open - a.open) || (b.failures - a.failures))
+      .slice(0, 50);
+  }
+
+  /** Uygulanan yuk sinirlari; panelde basliklarda gosterilir. */
+  limits() {
+    return { maxPerIp: this.maxPerIp, maxLoginsPerMinute: this.maxLoginsPerMinute };
   }
 
   /** Suresi dolmus kayitlari atar; bellek sinirsiz buyumesin. */
@@ -87,6 +163,8 @@ class LoginGuard {
     const cutoff = Date.now() - Math.max(this.banMs, 60 * 60 * 1000);
     for (const [ip, e] of this.entries) {
       if (e.bannedUntil > Date.now()) continue;
+      // Acik oturumu olan IP'nin sayaci silinirse oturum sayimi bozulur.
+      if (e.open > 0) continue;
       if (e.lastAt < cutoff) this.entries.delete(ip);
     }
   }
