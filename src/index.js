@@ -44,6 +44,18 @@ const pasvPool = new PasvPool({
 });
 ftpServer.getNextPasvPort = () => pasvPool.al();
 
+// Baglanti kimligi -> cikis temizligi. Soket olayi kacarsa sunucunun kendi
+// 'disconnect' olayi yedek olarak ayni temizligi calistirir.
+const cikisBekleyen = new Map();
+
+ftpServer.on('disconnect', ({ id }) => {
+  const temizle = cikisBekleyen.get(id);
+  if (temizle) {
+    cikisBekleyen.delete(id);
+    temizle();
+  }
+});
+
 ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
   const ip = connection.ip;
 
@@ -89,12 +101,18 @@ ftpServer.on('login', ({ connection, username, password }, resolve, reject) => {
   const markLogout = () => {
     if (loggedOut) return;
     loggedOut = true;
+    cikisBekleyen.delete(connection.id);
     guard.closeSession(ip);
     stats.logout(account.username);
     console.log(`[ftp] cikis: ${account.username} (${connection.ip})`);
   };
-  connection.once('close', markLogout);
-  connection.once('disconnect', markLogout);
+  // DIKKAT: ftp-srv'nin FtpConnection'i 'close'/'disconnect' YAYMAZ (yalnizca
+  // 'client-error'). Bu olaylar komut soketinde ve sunucu nesnesinde dogar.
+  // Baglanti kapaninca connection.removeAllListeners() cagrildigi icin
+  // dinleyici connection'a degil dogrudan sokete baglanmali; aksi halde oturum
+  // sayaci hic dusmez ve IP kalici olarak sinira takilir.
+  if (connection.commandSocket) connection.commandSocket.once('close', markLogout);
+  cikisBekleyen.set(connection.id, markLogout);
 
   connection.on('STOR', (err, filePath) => {
     if (err) {

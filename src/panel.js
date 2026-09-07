@@ -195,7 +195,10 @@ ${pasvInfo.exhausted ? `<div class="dim" style="margin-top:8px">
   <td>${g.lastThrottleAt ? ago(g.lastThrottleAt) : '—'}</td>
 </tr>`).join('')}</tbody></table></div>
 <div class="dim" style="margin-top:8px">Bir kamera sınırı aştığında girişi reddedilir;
-  böylece pasif mod portlarını tüketip diğer kameraları kilitlemesi önlenir.</div>` : '';
+  böylece pasif mod portlarını tüketip diğer kameraları kilitlemesi önlenir.${
+    guardLimits.sessionTtlMinutes
+      ? ` Kapanışı kaçırılan oturumlar ${guardLimits.sessionTtlMinutes} dakika sonra sayımdan düşer.`
+      : ''}</div>` : '';
 
   const msgBlock = message
     ? `<div class="msg ${message.kind === 'bad' ? 'bad' : 'good'}">${esc(message.text)}</div>`

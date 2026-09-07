@@ -27,7 +27,8 @@ npm start
 | `FTP_PASV_MIN` / `FTP_PASV_MAX` | Pasif veri portu aralığı — güvenlik duvarında açık olmalı |
 | `FTP_USER` / `FTP_PASS` | FTP giriş bilgileri |
 | `FTP_ANONYMOUS` | `true` ise parolasız giriş |
-| `FTP_MAX_CONN_PER_IP` | IP başına eş zamanlı oturum sınırı (varsayılan `10`, `0` = sınırsız) |
+| `FTP_MAX_CONN_PER_IP` | IP başına eş zamanlı oturum sınırı (varsayılan `20`, `0` = sınırsız) |
+| `FTP_SESSION_TTL_MIN` | Bu süreden eski oturumlar eş zamanlılık sayımından düşer (varsayılan `30`) |
 | `FTP_MAX_LOGINS_PER_MIN` | IP başına dakikalık giriş sınırı (varsayılan `120`, `0` = sınırsız) |
 
 > **Pasif mod portları hakkında.** Her `PASV` komutu aralıktan bir port ayırır ve kamera

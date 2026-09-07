@@ -50,8 +50,10 @@ const config = {
     banMinutes: parseInt(process.env.FTP_BAN_MINUTES || '15', 10),
     // Tek bir kameranin pasif mod port araligini tuketip digerlerini disarida
     // birakmasini onler. 0 = sinirsiz.
-    maxPerIp: parseInt(process.env.FTP_MAX_CONN_PER_IP || '10', 10),
+    maxPerIp: parseInt(process.env.FTP_MAX_CONN_PER_IP || '20', 10),
     maxLoginsPerMinute: parseInt(process.env.FTP_MAX_LOGINS_PER_MIN || '120', 10),
+    // Kapanisi kacirilan oturum sonsuza kadar sayilmasin.
+    sessionTtlMinutes: parseInt(process.env.FTP_SESSION_TTL_MIN || '30', 10),
   },
   stats: {
     enabled: (process.env.STATS_ENABLED || 'true') !== 'false',

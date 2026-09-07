@@ -16,13 +16,18 @@ class LoginGuard {
   constructor({
     maxFailures = 10,
     banMinutes = 15,
-    maxPerIp = 10,
+    maxPerIp = 20,
     maxLoginsPerMinute = 120,
+    sessionTtlMinutes = 30,
   } = {}) {
     this.maxFailures = maxFailures;
     this.banMs = banMinutes * 60 * 1000;
     this.maxPerIp = maxPerIp;
     this.maxLoginsPerMinute = maxLoginsPerMinute;
+    // Guvenlik agi: bir oturum kapanisi kacirilirsa sayac sonsuza kadar dolu
+    // kalir ve saglikli bir kamerayi kalici olarak disarida birakirdi. Bu
+    // sureden eski oturumlar sayima katilmaz.
+    this.sessionTtlMs = sessionTtlMinutes * 60 * 1000;
     this.entries = new Map();
   }
 
@@ -33,9 +38,9 @@ class LoginGuard {
         bannedUntil: 0,
         lastAt: 0,
         lastUser: null,
-        // Yuk sinirlama: acik oturum sayisi, son bir dakikanin giris zamanlari
-        // ve yuk yuzunden reddedilen istek sayaci.
-        open: 0,
+        // Yuk sinirlama: acik oturumlarin baslangic zamanlari, son bir
+        // dakikanin giris zamanlari ve yuk yuzunden reddedilen istek sayaci.
+        sessions: [],
         logins: [],
         throttled: 0,
         lastThrottleAt: 0,
@@ -84,10 +89,11 @@ class LoginGuard {
     const e = this._entry(ip);
     const now = Date.now();
 
-    if (this.maxPerIp > 0 && e.open >= this.maxPerIp) {
+    const acik = this._acikOturum(e, now);
+    if (this.maxPerIp > 0 && acik >= this.maxPerIp) {
       e.throttled += 1;
       e.lastThrottleAt = now;
-      return { ok: false, reason: 'concurrent', limit: this.maxPerIp, current: e.open };
+      return { ok: false, reason: 'concurrent', limit: this.maxPerIp, current: acik };
     }
 
     const pencere = now - 60 * 1000;
@@ -105,15 +111,24 @@ class LoginGuard {
     return { ok: true };
   }
 
-  /** Basarili girisin ardindan acik oturum sayacini artirir. */
-  openSession(ip) {
-    this._entry(ip).open += 1;
+  /** Suresi gecmis oturumlari atar ve gercekten acik olanlarin sayisini verir. */
+  _acikOturum(e, now = Date.now()) {
+    if (this.sessionTtlMs > 0) {
+      const sinir = now - this.sessionTtlMs;
+      e.sessions = e.sessions.filter((t) => t > sinir);
+    }
+    return e.sessions.length;
   }
 
-  /** Oturum kapandiginda sayaci duser. Ayni kapanis iki kez bildirilmemeli. */
+  /** Basarili girisin ardindan oturumu kaydeder. */
+  openSession(ip) {
+    this._entry(ip).sessions.push(Date.now());
+  }
+
+  /** Oturum kapandiginda en eski kaydi duser. Ayni kapanis iki kez bildirilmemeli. */
   closeSession(ip) {
     const e = this.entries.get(ip);
-    if (e && e.open > 0) e.open -= 1;
+    if (e && e.sessions.length) e.sessions.shift();
   }
 
   succeed(ip) {
@@ -134,7 +149,8 @@ class LoginGuard {
     const pencere = now - 60 * 1000;
     const rows = [];
     for (const [ip, e] of this.entries) {
-      if (!e.failures && !e.bannedUntil && !e.throttled && !e.open) continue;
+      const acik = this._acikOturum(e, now);
+      if (!e.failures && !e.bannedUntil && !e.throttled && !acik) continue;
       rows.push({
         ip,
         failures: e.failures,
@@ -142,7 +158,7 @@ class LoginGuard {
         bannedUntil: e.bannedUntil > now ? new Date(e.bannedUntil).toISOString() : null,
         lastAt: e.lastAt ? new Date(e.lastAt).toISOString() : null,
         lastUser: e.lastUser,
-        open: e.open,
+        open: acik,
         loginsPerMinute: e.logins.filter((t) => t > pencere).length,
         throttled: e.throttled,
         lastThrottleAt: e.lastThrottleAt ? new Date(e.lastThrottleAt).toISOString() : null,
@@ -155,7 +171,11 @@ class LoginGuard {
 
   /** Uygulanan yuk sinirlari; panelde basliklarda gosterilir. */
   limits() {
-    return { maxPerIp: this.maxPerIp, maxLoginsPerMinute: this.maxLoginsPerMinute };
+    return {
+      maxPerIp: this.maxPerIp,
+      maxLoginsPerMinute: this.maxLoginsPerMinute,
+      sessionTtlMinutes: Math.round(this.sessionTtlMs / 60000),
+    };
   }
 
   /** Suresi dolmus kayitlari atar; bellek sinirsiz buyumesin. */
@@ -164,7 +184,7 @@ class LoginGuard {
     for (const [ip, e] of this.entries) {
       if (e.bannedUntil > Date.now()) continue;
       // Acik oturumu olan IP'nin sayaci silinirse oturum sayimi bozulur.
-      if (e.open > 0) continue;
+      if (this._acikOturum(e) > 0) continue;
       if (e.lastAt < cutoff) this.entries.delete(ip);
     }
   }
