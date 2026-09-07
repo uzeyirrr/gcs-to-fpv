@@ -99,6 +99,15 @@ a{color:#6bb8ff}
 .tile .pick{display:flex;align-items:center;gap:6px;padding:6px 9px 0;font-size:12px;
   color:#8b93a7;cursor:pointer}
 .tile .pick input{width:15px;height:15px;padding:0;accent-color:#1f6feb}
+table.liste td{padding:7px 12px}
+table.liste input[type=checkbox]{width:15px;height:15px;padding:0;accent-color:#1f6feb}
+button.ad{background:none;border:0;padding:0;color:#6bb8ff;font-size:13.5px;text-align:left;
+  cursor:pointer;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button.ad:hover{text-decoration:underline;background:none}
+button.ad::before{content:"▸ ";color:#5d6478}
+button.ad.acik::before{content:"▾ "}
+tr.onizleme td{background:#0b0d12;padding:12px}
+tr.onizleme img,tr.onizleme video{max-width:100%;max-height:70vh;border-radius:6px;display:block}
 `;
 
 function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, guardRows = [],
@@ -282,18 +291,22 @@ function renderGallery({ cameras, selected, days, day, files, hours, hour,
       ).join('')
     : '';
 
-  const tiles = files.map((f) => {
+  // Kamera dosyalari 7-12 MB civarinda. Karolarda onizleme gosterilseydi tek
+  // sayfa yuzlerce MB'i tek Node process'inden gecirir ve sayfa acilmazdi; bu
+  // yuzden liste halinde yalnizca isim gosterilir, dosya ancak tiklaninca yuklenir.
+  const tiles = files.map((f, i) => {
     const src = `/dosya?k=${encodeURIComponent(f.key)}`;
-    const inner = f.kind === 'resim'
-      ? `<img loading="lazy" src="${src}" alt="${esc(f.name)}">`
-      : `<div class="vid">▶ video</div>`;
-    const when = f.time || '';
-    return `<div class="tile">
-  <label class="pick"><input type="checkbox" name="k" value="${esc(f.key)}"> seç</label>
-  <a href="${src}" target="_blank" rel="noopener">${inner}</a>
-  <div class="meta"><b title="${esc(f.name)}">${esc(f.name)}</b>
-    <span class="dim">${esc(when)} · ${humanBytes(f.size)}</span></div>
-</div>`;
+    const tur = f.kind === 'resim' ? 'Resim' : 'Video';
+    return `<tr class="satir">
+  <td><input type="checkbox" name="k" value="${esc(f.key)}"></td>
+  <td><button type="button" class="ad" data-i="${i}" data-src="${src}"
+        data-tur="${f.kind}" title="${esc(f.name)}">${esc(f.name)}</button></td>
+  <td class="dim">${esc(f.time || '')}</td>
+  <td class="dim">${humanBytes(f.size)}</td>
+  <td class="dim">${tur}</td>
+  <td><a href="${src}" target="_blank" rel="noopener">Yeni sekmede aç</a></td>
+</tr>
+<tr class="onizleme" id="on${i}" hidden><td colspan="6"></td></tr>`;
   }).join('');
 
   const saatQ = hour ? `&saat=${encodeURIComponent(hour)}` : '';
@@ -331,7 +344,11 @@ function renderGallery({ cameras, selected, days, day, files, hours, hour,
     <button class="danger" type="submit">Seçilenleri sil</button>
     <span class="dim" id="silSayac">0 dosya seçili</span>
   </div>
-  <div class="grid">${tiles}</div>
+  <div class="tablewrap"><table class="liste" style="min-width:620px">
+    <thead><tr><th style="width:34px"></th><th>Dosya</th><th>Saat</th><th>Boyut</th>
+      <th>Tür</th><th></th></tr></thead>
+    <tbody>${tiles}</tbody>
+  </table></div>
 </form>${more}${prev}
 <script>
 function galeriKutular(){return document.querySelectorAll('#silForm input[name=k]')}
@@ -347,6 +364,28 @@ function galeriOnayla(f){
 }
 document.addEventListener('change',function(e){
   if(e.target && e.target.name==='k') galeriSayac();
+});
+// Dosyalar 7-12 MB oldugu icin onizleme ancak isme tiklaninca indirilir.
+document.addEventListener('click',function(e){
+  var b=e.target.closest?e.target.closest('button.ad'):null;
+  if(!b) return;
+  e.preventDefault();
+  var satir=document.getElementById('on'+b.dataset.i);
+  var hucre=satir.firstElementChild;
+  if(!satir.hidden){satir.hidden=true;b.classList.remove('acik');return}
+  satir.hidden=false;b.classList.add('acik');
+  if(hucre.dataset.yuklendi) return;
+  hucre.dataset.yuklendi='1';
+  hucre.innerHTML='<div class="dim">yükleniyor…</div>';
+  if(b.dataset.tur==='resim'){
+    var im=new Image();
+    im.alt=b.textContent;
+    im.onload=function(){hucre.innerHTML='';hucre.appendChild(im)};
+    im.onerror=function(){hucre.innerHTML='<div class="err">Dosya açılamadı</div>'};
+    im.src=b.dataset.src;
+  }else{
+    hucre.innerHTML='<video controls preload="metadata" src="'+b.dataset.src+'"></video>';
+  }
 });
 </script>`;
   }
@@ -370,7 +409,7 @@ ${body}
 </div></body></html>`;
 }
 
-const PAGE = 120; // galeride sayfa basina dosya
+const PAGE = 300; // galeride sayfa basina dosya (liste oldugu icin satirlar ucuz)
 
 /**
  * Islem sonucu mesajlari. Yeni uretilen FTP parolasi kullaniciya gosterilmek
