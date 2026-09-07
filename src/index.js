@@ -1,7 +1,9 @@
 'use strict';
 
+const https = require('https');
 const { FtpSrv } = require('ftp-srv');
 const { S3Client, HeadBucketCommand } = require('@aws-sdk/client-s3');
+const { NodeHttpHandler } = require('@smithy/node-http-handler');
 
 const config = require('./config');
 const { S3FileSystem } = require('./s3fs');
@@ -11,6 +13,16 @@ const { startPanel } = require('./panel');
 const { LoginGuard } = require('./guard');
 const { PasvPool } = require('./pasv');
 
+/**
+ * DIKKAT: SDK'nin varsayilanlarinda hicbir zaman asimi YOKTUR
+ * (@smithy/node-http-handler: connectionTimeout/requestTimeout/socketTimeout hepsi 0).
+ * Takilan tek bir GCS istegi, FTP aktarimini ve pasif mod portunu sonsuza kadar
+ * asili birakir. Ayrica requestTimeout tek basina yalnizca uyari basar; hatanin
+ * firlatilmasi icin throwOnRequestTimeout gerekir.
+ *
+ * socketTimeout bosta kalma suresidir, buyuk dosya yuklemesini kesmez;
+ * requestTimeout ise istek basina ust sinirdir, genis tutulur.
+ */
 const client = new S3Client({
   endpoint: config.s3.endpoint,
   region: config.s3.region,
@@ -19,6 +31,18 @@ const client = new S3Client({
     accessKeyId: config.s3.accessKeyId,
     secretAccessKey: config.s3.secretAccessKey,
   },
+  maxAttempts: 3,
+  requestHandler: new NodeHttpHandler({
+    connectionTimeout: 10 * 1000,
+    socketTimeout: 60 * 1000,
+    requestTimeout: 5 * 60 * 1000,
+    throwOnRequestTimeout: true,
+    httpsAgent: new https.Agent({
+      keepAlive: true,
+      keepAliveMsecs: 15 * 1000,
+      maxSockets: 64,
+    }),
+  }),
 });
 
 const stats = new Stats({ timezone: config.timezone });
@@ -33,7 +57,39 @@ const ftpServer = new FtpSrv({
   anonymous: config.ftp.anonymous,
   greeting: [`GCS FTP koprusu - bucket: ${config.s3.bucket}`],
   file_format: 'ls',
+  // Varsayilan 0'dir, yani olu bir kontrol baglantisi sonsuza kadar durur.
+  // Kameranin baglantisi yol ustunde sessizce dusurulunce kamera bunu fark
+  // etmeden bekler ve dosya gondermeyi birakir; sunucu da oturumu hic
+  // temizlemez. Bu sure BOSTA kalma suresidir: veri aktarimi sirasinda kontrol
+  // soketi sessiz oldugu icin en uzun aktarimdan bol farkla buyuk olmali.
+  timeout: config.ftp.timeoutSeconds * 1000,
 });
+
+// Yol ustundeki NAT/guvenlik duvari akisi sessizce dusurdugunde tarafların
+// hicbiri haberdar olmaz. TCP keepalive olu baglantiyi birkac dakikada ortaya
+// cikarir; boylece oturum kapanir ve kamera yeniden baglanabilir.
+ftpServer.on('connect', ({ connection }) => {
+  const s = connection && connection.commandSocket;
+  if (s) s.setKeepAlive(true, 30 * 1000);
+});
+
+/**
+ * Veri aktarimi surerken kontrol soketi sessizdir; ftp-srv bunu "bosta" sayip
+ * yavas bir kamerayi aktarimin ortasinda 421 ile keserdi. Aktarimi olan
+ * baglantilarin bosta sayaci duzenli olarak tazelenir, boylece zaman asimi
+ * yalnizca gercekten hicbir sey yapmayan baglantilari toplar.
+ */
+if (config.ftp.timeoutSeconds > 0) {
+  const tazele = setInterval(() => {
+    for (const c of Object.values(ftpServer.connections || {})) {
+      const veri = c && c.connector && c.connector.dataSocket;
+      if (veri && !veri.destroyed && c.commandSocket && !c.commandSocket.destroyed) {
+        c.commandSocket.setTimeout(config.ftp.timeoutSeconds * 1000);
+      }
+    }
+  }, Math.max(5, Math.floor(config.ftp.timeoutSeconds / 3)) * 1000);
+  tazele.unref();
+}
 
 // ftp-srv'nin kendi port bulucusu aralikta yalnizca 5 port dener; yerine tum
 // araligi tarayan havuz konur (bkz. pasv.js).

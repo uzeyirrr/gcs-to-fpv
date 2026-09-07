@@ -15,6 +15,10 @@ const {
 const { Upload } = require('@aws-sdk/lib-storage');
 const { dateStamp } = require('./stats');
 
+// Tek bir dosya yuklemesi icin ust sinir. SDK zaman asimlari da devrede;
+// bu yalnizca hicbirine takilmayan bir tikanmaya karsi son savunmadir.
+const UPLOAD_TIMEOUT_MS = parseInt(process.env.UPLOAD_TIMEOUT_SEC || '600', 10) * 1000;
+
 const DIR_MODE = 0o40755;
 const FILE_MODE = 0o100644;
 
@@ -277,7 +281,21 @@ class S3FileSystem extends FileSystem {
       partSize: 8 * 1024 * 1024,
     });
 
-    const uploadPromise = upload.done();
+    // Son savunma: SDK zaman asimlari devredeyken bile bir yukleme takilirsa
+    // STOR sonsuza kadar 226 beklemesin. Sure dolunca yukleme iptal edilir ve
+    // istemci acik bir hata alir; boylece FTP baglantisi serbest kalir.
+    const uploadPromise = Promise.race([
+      upload.done(),
+      new Promise((_, reject) => {
+        const t = setTimeout(() => {
+          upload.abort().catch(() => {});
+          const err = new Error(`Yukleme zaman asimina ugradi (${UPLOAD_TIMEOUT_MS / 1000} sn): ${key}`);
+          err.code = 'ETIMEDOUT';
+          reject(err);
+        }, UPLOAD_TIMEOUT_MS);
+        if (t.unref) t.unref();
+      }),
+    ]);
     // Hata _final icinde tekrar beklenecek; burada unhandled rejection olmasin.
     uploadPromise.catch(() => {});
 

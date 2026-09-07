@@ -33,6 +33,10 @@ const config = {
     pasvUrl: process.env.FTP_PASV_URL || process.env.FTP_HOST || '127.0.0.1',
     pasvMin: parseInt(process.env.FTP_PASV_MIN || '50000', 10),
     pasvMax: parseInt(process.env.FTP_PASV_MAX || '50100', 10),
+    // Bosta kalan kontrol baglantisi bu surenin sonunda kapatilir. Veri aktarimi
+    // sirasinda kontrol soketi sessiz oldugu icin en uzun yuklemeden bol farkla
+    // buyuk olmali. 0 = kapali (olu baglantilar sonsuza kadar birikir).
+    timeoutSeconds: parseInt(process.env.FTP_TIMEOUT_SEC || '600', 10),
     anonymous: (process.env.FTP_ANONYMOUS || 'false') === 'true',
     user: process.env.FTP_USER || 'gcs',
     pass: process.env.FTP_PASS || 'gcs',

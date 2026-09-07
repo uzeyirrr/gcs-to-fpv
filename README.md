@@ -29,6 +29,8 @@ npm start
 | `FTP_ANONYMOUS` | `true` ise parolasız giriş |
 | `FTP_MAX_CONN_PER_IP` | IP başına eş zamanlı oturum sınırı (varsayılan `20`, `0` = sınırsız) |
 | `FTP_SESSION_TTL_MIN` | Bu süreden eski oturumlar eş zamanlılık sayımından düşer (varsayılan `30`) |
+| `FTP_TIMEOUT_SEC` | Boşta kalan kontrol bağlantısı bu süre sonunda kapatılır (varsayılan `600`, `0` = kapalı) |
+| `UPLOAD_TIMEOUT_SEC` | Tek dosya yüklemesi için üst sınır (varsayılan `600`) |
 | `FTP_MAX_LOGINS_PER_MIN` | IP başına dakikalık giriş sınırı (varsayılan `120`, `0` = sınırsız) |
 
 > **Pasif mod portları hakkında.** Her `PASV` komutu aralıktan bir port ayırır ve kamera
