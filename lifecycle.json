@@ -1,0 +1,14 @@
+{
+  "rule": [
+    {
+      "action": { "type": "Delete" },
+      "condition": {
+        "age": 30,
+        "matchesSuffix": [
+          ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+          ".mp4", ".mkv", ".avi", ".mov", ".dav"
+        ]
+      }
+    }
+  ]
+}

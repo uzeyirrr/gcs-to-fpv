@@ -249,6 +249,67 @@ kullanıcı adını denediği görünür ve engel elle kaldırılabilir.
 Bu bir güvenlik duvarı yerine geçmez, sadece parola denemesini yavaşlatır. Şifrelemeyi (FTPS) ve
 mümkünse IP kısıtlamasını hâlâ değerlendirin.
 
+## Otomatik silme (GCS lifecycle)
+
+Kamera görüntüleri sınırsız birikmesin diye saklama süresi **bucket'ın kendi lifecycle
+kuralıyla** yönetilir. Silme işini Google yapar: uygulama kapalı olsa bile çalışır, ek
+istek ücreti çıkarmaz ve uygulamada hiçbir kod gerektirmez.
+
+Kural `lifecycle.json` dosyasında duruyor: **30 günden eski medya dosyaları silinir.**
+
+```bash
+# Uygula
+gcloud storage buckets update gs://BUCKET_ADINIZ --lifecycle-file=lifecycle.json
+
+# Doğrula
+gcloud storage buckets describe gs://BUCKET_ADINIZ --format="value(lifecycle)"
+```
+
+### Neden uzantıya bakıyor, klasöre değil
+
+Kural `matchesPrefix` (klasör) yerine `matchesSuffix` (uzantı) kullanıyor. İki sebebi var:
+
+1. **Kameralar panelden açılıyor.** Klasör listesi yazsaydık, panelden her yeni kamera
+   eklediğinizde `lifecycle.json`'ı elle güncellemeniz gerekirdi; unutulan bir kameranın
+   görüntüleri sessizce sonsuza kadar birikirdi. Uzantı kuralı yeni kameraları kendiliğinden
+   kapsar.
+
+2. **Kamera hesapları da bucket'ın içinde.** `_system/users.json` tüm kullanıcı adlarını,
+   parolaları ve klasörleri tutuyor (bkz. "Kayıtlar nerede tutuluyor"). Bucket'a düz bir
+   "30 günden eskiyi sil" kuralı koysaydınız bu dosya da silinirdi ve bir sonraki yeniden
+   başlatmada panelden açtığınız **tüm kameralar kaybolur**, uygulama `.env`'deki
+   `FTP_USERS` ile sıfırdan tohumlardı. `.json` hiçbir uzantı listesinde olmadığı için
+   bu dosya kurala hiç takılmaz.
+
+### Kameranız başka uzantı yazıyorsa
+
+Listede olmayan bir uzantı hiç silinmez. Bucket'ta gerçekte hangi uzantıların olduğunu
+görmek için:
+
+```bash
+gcloud storage ls -r 'gs://BUCKET_ADINIZ/**' | grep -o '\.[A-Za-z0-9]*$' | sort | uniq -c | sort -rn
+```
+
+Eksik olanı `lifecycle.json` içindeki `matchesSuffix` listesine ekleyip komutu tekrar
+çalıştırın. Listedekiler galeride tanınan türler (`gallery.js`) artı Dahua/Hikvision
+kayıt formatı `.dav`.
+
+### Bilinmesi gerekenler
+
+- **Süre nesnenin yazılma zamanından sayılır.** `AUTO_DATE_PATH` ile dosyalar zaten gün
+  klasörlerine ayrıldığı için klasör adı ile silinme zamanı örtüşür — `2026-08-01/`
+  klasörü 31 Ağustos civarında boşalır.
+- **Silme geri alınamaz** ve lifecycle taraması eşzamanlı değil; koşul sağlandıktan sonra
+  24 saate kadar gecikebilir.
+- **Boş klasör işaretçileri kalır.** FTP `MKD` ile açılan `klasor/` nesnelerinin uzantısı
+  olmadığı için silinmezler. Sıfır baytlıklar, maliyeti yok, listelemede de görünmezler.
+- **Object Versioning açıksa** bu kural yalnızca canlı sürümü siler; eski sürümler için
+  ayrıca `daysSinceNoncurrentTime` koşullu bir kural gerekir. Varsayılan olarak kapalıdır.
+- **Panel sayaçları lifecycle silmelerini görmez.** "Toplam" sütunu yalnızca galeriden
+  yapılan silmeleri düşer (`stats.deleted`); Google'ın sildiklerinden haberi olmaz. Sayaçlar
+  zaten bellekte tutulduğu ve her yeniden başlatmada sıfırlandığı için pratikte fark
+  yaratmaz, ama uzun süre ayakta kalan bir sunucuda "Toplam" bucket'takinden fazla görünebilir.
+
 ## Güvenlik notları
 
 Uygulama bir güvenlik denetiminden geçti; bulunanlar ve alınan önlemler:
