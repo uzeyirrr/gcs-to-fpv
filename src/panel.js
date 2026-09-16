@@ -160,10 +160,11 @@ function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, gua
   // Pasif mod portlari tukendiginde hicbir kamera dosya yukleyemez; sorun
   // loglara bakmadan gorulebilsin diye havuz durumu panelde gosterilir.
   const pasvKart = pasvInfo ? `<h2>Pasif mod port havuzu</h2>
-<div class="tablewrap"><table style="min-width:640px">
+<div class="tablewrap"><table style="min-width:900px">
 <thead><tr>
   <th>Aralık</th><th>Port</th><th>Verilen</th><th>Tükenme</th>
   <th>Son tükenme</th><th>Son aramada dolu</th>
+  <th>Açık dinleyici</th><th>En eski</th><th>Ölü veri soketi</th>
 </tr></thead>
 <tbody><tr>
   <td><code>${pasvInfo.min}–${pasvInfo.max}</code></td>
@@ -174,6 +175,13 @@ function renderDashboard({ snap, users, message, ftpInfo, staleAfterMinutes, gua
     : '<span class="pill ok">0</span>'}</td>
   <td>${pasvInfo.lastExhaustedAt ? ago(pasvInfo.lastExhaustedAt) : '—'}</td>
   <td>${pasvInfo.lastBusy} / ${pasvInfo.size}</td>
+  <td>${pasvInfo.openListeners ?? '—'}</td>
+  <td>${pasvInfo.oldestListenerSec
+    ? (pasvInfo.oldestListenerSec >= 120
+      ? `<span class="err">${Math.round(pasvInfo.oldestListenerSec / 60)} dk</span>`
+      : `${pasvInfo.oldestListenerSec} sn`)
+    : '—'}</td>
+  <td>${pasvInfo.deadDataSockets || 0}</td>
 </tr></tbody></table></div>
 ${pasvInfo.exhausted ? `<div class="dim" style="margin-top:8px">
   Havuz tükendiğinde kameralar <code>PASV</code> hatası alır ve dosya yükleyemez.

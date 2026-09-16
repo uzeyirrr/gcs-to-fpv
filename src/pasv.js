@@ -96,4 +96,99 @@ class PasvPool {
   }
 }
 
-module.exports = { PasvPool };
+/**
+ * ftp-srv'nin pasif veri sunucusu yalnizca iki durumda kapanir: 30 sn icinde
+ * kimse baglanmazsa, ya da baglanan veri soketi 'close' yayarsa. Karsi taraf
+ * CGNAT kaymasiyla kaybolursa soket ne FIN ne RST alir; veri soketinde zaman
+ * asimi ve keepalive olmadigi icin 'close' hic gelmez ve port sonsuza kadar
+ * dinlemede kalir. Her kayma bir port goturur; havuz birkac gunde biter.
+ *
+ * Bu kanca her veri soketine bosta zaman asimi ve keepalive ekler (olu soket
+ * yikilinca ftp-srv sunucuyu kendisi kapatir), dinleyiciye de mutlak bir omur
+ * siniri koyar. Ayrica kontrol soketinin bosta sayacini yalnizca veri gercekten
+ * akarken tazeler; olu bir veri soketi kontrol baglantisini olumsuz yapmasin.
+ */
+function veriKancasi(ftpServer, pool, {
+  veriBostaSn = 120,
+  dinleyiciOmruSn = 30 * 60,
+  kontrolBostaSn = 0,
+} = {}) {
+  const Passive = require('ftp-srv/src/connector/passive');
+  if (!Passive.prototype._gcsKancali) {
+    const asil = Passive.prototype.setupServer;
+    Passive.prototype.setupServer = function setupServer(...args) {
+      return asil.apply(this, args).then((server) => {
+        const kayit = pool._dinleyiciEkle(server);
+        server.on('connection', (sock) => {
+          sock.setKeepAlive(true, 30 * 1000);
+          sock.setTimeout(veriBostaSn * 1000, () => {
+            pool.olubVeri += 1;
+            sock.destroy();
+          });
+        });
+        const omur = setTimeout(() => {
+          if (server.listening) {
+            pool.zorlaKapatilan += 1;
+            server.close();
+          }
+        }, dinleyiciOmruSn * 1000);
+        if (omur.unref) omur.unref();
+        server.once('close', () => {
+          clearTimeout(omur);
+          pool._dinleyiciSil(kayit);
+        });
+        return server;
+      });
+    };
+    Passive.prototype._gcsKancali = true;
+  }
+
+  if (kontrolBostaSn > 0) {
+    const sonBayt = new WeakMap();
+    const tazele = setInterval(() => {
+      for (const c of Object.values(ftpServer.connections || {})) {
+        const veri = c && c.connector && c.connector.dataSocket;
+        if (!veri || veri.destroyed || !c.commandSocket || c.commandSocket.destroyed) continue;
+        const simdi = veri.bytesRead + veri.bytesWritten;
+        if (simdi !== sonBayt.get(veri)) {
+          sonBayt.set(veri, simdi);
+          c.commandSocket.setTimeout(kontrolBostaSn * 1000);
+        }
+      }
+    }, Math.max(2, Math.floor(kontrolBostaSn / 3)) * 1000);
+    if (tazele.unref) tazele.unref();
+  }
+}
+
+PasvPool.prototype._dinleyiciEkle = function _dinleyiciEkle(server) {
+  if (!this.dinleyiciler) this.dinleyiciler = new Map();
+  const kayit = {};
+  this.dinleyiciler.set(kayit, { server, acilis: Date.now() });
+  return kayit;
+};
+
+PasvPool.prototype._dinleyiciSil = function _dinleyiciSil(kayit) {
+  if (this.dinleyiciler) this.dinleyiciler.delete(kayit);
+};
+
+PasvPool.prototype.olubVeri = 0;
+PasvPool.prototype.zorlaKapatilan = 0;
+
+const eskiSnapshot = PasvPool.prototype.snapshot;
+PasvPool.prototype.snapshot = function snapshot() {
+  const s = eskiSnapshot.call(this);
+  let enEski = 0;
+  let acik = 0;
+  for (const { server, acilis } of (this.dinleyiciler || new Map()).values()) {
+    if (!server.listening) continue;
+    acik += 1;
+    if (!enEski || acilis < enEski) enEski = acilis;
+  }
+  s.openListeners = acik;
+  s.oldestListenerSec = enEski ? Math.round((Date.now() - enEski) / 1000) : 0;
+  s.deadDataSockets = this.olubVeri;
+  s.forceClosed = this.zorlaKapatilan;
+  return s;
+};
+
+module.exports = { PasvPool, veriKancasi };

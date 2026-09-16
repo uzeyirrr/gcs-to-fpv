@@ -11,7 +11,7 @@ const { Stats, dateStamp } = require('./stats');
 const { UserStore } = require('./store');
 const { startPanel } = require('./panel');
 const { LoginGuard } = require('./guard');
-const { PasvPool } = require('./pasv');
+const { PasvPool, veriKancasi } = require('./pasv');
 
 /**
  * DIKKAT: SDK'nin varsayilanlarinda hicbir zaman asimi YOKTUR
@@ -73,23 +73,6 @@ ftpServer.on('connect', ({ connection }) => {
   if (s) s.setKeepAlive(true, 30 * 1000);
 });
 
-/**
- * Veri aktarimi surerken kontrol soketi sessizdir; ftp-srv bunu "bosta" sayip
- * yavas bir kamerayi aktarimin ortasinda 421 ile keserdi. Aktarimi olan
- * baglantilarin bosta sayaci duzenli olarak tazelenir, boylece zaman asimi
- * yalnizca gercekten hicbir sey yapmayan baglantilari toplar.
- */
-if (config.ftp.timeoutSeconds > 0) {
-  const tazele = setInterval(() => {
-    for (const c of Object.values(ftpServer.connections || {})) {
-      const veri = c && c.connector && c.connector.dataSocket;
-      if (veri && !veri.destroyed && c.commandSocket && !c.commandSocket.destroyed) {
-        c.commandSocket.setTimeout(config.ftp.timeoutSeconds * 1000);
-      }
-    }
-  }, Math.max(5, Math.floor(config.ftp.timeoutSeconds / 3)) * 1000);
-  tazele.unref();
-}
 
 // ftp-srv'nin kendi port bulucusu aralikta yalnizca 5 port dener; yerine tum
 // araligi tarayan havuz konur (bkz. pasv.js).
@@ -99,6 +82,13 @@ const pasvPool = new PasvPool({
   max: config.ftp.pasvMax,
 });
 ftpServer.getNextPasvPort = () => pasvPool.al();
+
+// Olu veri soketleri portu sonsuza kadar tutmasin; kontrol soketinin bosta
+// sayaci da yalnizca veri gercekten akarken tazelensin (bkz. pasv.js).
+veriKancasi(ftpServer, pasvPool, {
+  veriBostaSn: config.ftp.dataIdleSeconds,
+  kontrolBostaSn: config.ftp.timeoutSeconds,
+});
 
 // Baglanti kimligi -> cikis temizligi. Soket olayi kacarsa sunucunun kendi
 // 'disconnect' olayi yedek olarak ayni temizligi calistirir.

@@ -29,6 +29,7 @@ npm start
 | `FTP_ANONYMOUS` | `true` ise parolasız giriş |
 | `FTP_MAX_CONN_PER_IP` | IP başına eş zamanlı oturum sınırı (varsayılan `20`, `0` = sınırsız) |
 | `FTP_SESSION_TTL_MIN` | Bu süreden eski oturumlar eş zamanlılık sayımından düşer (varsayılan `30`) |
+| `FTP_DATA_IDLE_SEC` | Bu süre hiç veri akmayan veri bağlantısı kapatılır, pasif portu serbest kalır (varsayılan `120`) |
 | `FTP_TIMEOUT_SEC` | Boşta kalan kontrol bağlantısı bu süre sonunda kapatılır (varsayılan `600`, `0` = kapalı) |
 | `UPLOAD_TIMEOUT_SEC` | Tek dosya yüklemesi için üst sınır (varsayılan `600`) |
 | `FTP_MAX_LOGINS_PER_MIN` | IP başına dakikalık giriş sınırı (varsayılan `120`, `0` = sınırsız) |

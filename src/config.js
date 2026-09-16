@@ -37,6 +37,9 @@ const config = {
     // sirasinda kontrol soketi sessiz oldugu icin en uzun yuklemeden bol farkla
     // buyuk olmali. 0 = kapali (olu baglantilar sonsuza kadar birikir).
     timeoutSeconds: parseInt(process.env.FTP_TIMEOUT_SEC || '600', 10),
+    // Bu kadar sure hic veri akmayan veri baglantisi kapatilir ve pasif portu
+    // serbest birakilir (CGNAT kaymasinda karsi taraf sessizce kaybolur).
+    dataIdleSeconds: parseInt(process.env.FTP_DATA_IDLE_SEC || '120', 10),
     anonymous: (process.env.FTP_ANONYMOUS || 'false') === 'true',
     user: process.env.FTP_USER || 'gcs',
     pass: process.env.FTP_PASS || 'gcs',
